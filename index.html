@@ -7,13 +7,28 @@
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #151b33; font-family: system-ui, sans-serif; color: #fff; }
     canvas { display: block; }
-    #ui { position: fixed; left: 12px; top: 12px; pointer-events: none; text-shadow: 0 1px 3px #000; }
-    #ui h1 { margin: 0 0 6px; font-size: 18px; }
-    #hp { font-size: 26px; color: #ff4d5e; letter-spacing: 3px; }
-    #foe { font-size: 13px; opacity: .85; }
-    #help { margin-top: 8px; font-size: 13px; line-height: 1.5; opacity: .9; max-width: 340px; }
+    #ui { position: fixed; left: 12px; top: 12px; text-shadow: 0 1px 3px #000; max-width: 360px; }
+    #ui h1 { margin: 0 0 4px; font-size: 18px; pointer-events: none; }
+    #lvl, #wpn, #foe { font-size: 13px; opacity: .9; pointer-events: none; }
+    #hp { font-size: 26px; color: #ff4d5e; letter-spacing: 3px; pointer-events: none; }
+    #help { margin-top: 8px; font-size: 12.5px; line-height: 1.5; opacity: .9; pointer-events: none; }
     #msg { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); font-size: 30px; font-weight: 700;
            text-align: center; text-shadow: 0 2px 6px #000; pointer-events: none; white-space: pre-line; opacity: 0; transition: opacity .3s; }
+    .btn { background: #2a3566; color: #fff; border: 1px solid #5a6bb8; border-radius: 8px; padding: 7px 11px; font-size: 13px; cursor: pointer; }
+    .btn:hover { background: #38478a; }
+    .btn.on { background: #b4235a; border-color: #ff6a9a; }
+    #tools { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+    #shareBox, #watchBox { margin-top: 8px; background: rgba(10,12,25,.8); border: 1px solid #5a6bb8; border-radius: 8px; padding: 8px; font-size: 12.5px; display: none; }
+    #shareBox input, #watchBox input { width: 100%; box-sizing: border-box; margin: 4px 0; padding: 5px; border-radius: 6px; border: 1px solid #5a6bb8; background: #0d1226; color: #fff; font-size: 13px; }
+    #shareCode { font-size: 22px; font-weight: 700; letter-spacing: 4px; color: #ffd24a; }
+    #guestBar { position: fixed; left: 0; right: 0; bottom: 12px; display: none; justify-content: center; gap: 6px; flex-wrap: wrap; padding: 0 8px; }
+    #gStatus { position: fixed; right: 12px; top: 12px; background: rgba(10,12,25,.8); border: 1px solid #5a6bb8; border-radius: 8px; padding: 6px 10px; font-size: 13px; display: none; }
+    #gOverlay { position: fixed; inset: 0; background: rgba(8,10,22,.82); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 14px; text-align: center; padding: 20px; }
+    #gOverlay h2 { margin: 0; font-size: 24px; }
+    #gOverlay p { margin: 0; opacity: .85; max-width: 420px; }
+    body.guest #help, body.guest #tools, body.guest #shareBox, body.guest #watchBox { display: none !important; }
+    body.guest #guestBar { display: flex; }
+    body.guest #gStatus { display: block; }
   </style>
   <script type="importmap">
     {
@@ -29,14 +44,44 @@
     <h1>Рыцарь: Пленница дракона</h1>
     <div id="lvl"></div>
     <div id="hp"></div>
+    <div id="wpn"></div>
     <div id="foe"></div>
     <div id="help">
-      <b>В шлеме Quest 2:</b> нажми «Enter VR». Меч — в правой руке, щит — в левой. Левый стик — ходьба, правый — поворот рывками.
-      Бей мечом резкими замахами, подставляй щит под удар гоблина.<br>
-      <b>На компьютере:</b> WASD — ходьба, мышь с зажатой кнопкой — обзор, клик — удар, Shift или правая кнопка — блок.
+      <b>В шлеме Quest 2:</b> «Enter VR». Правая рука — оружие, левая — щит. Левый стик — ходьба, правый — поворот.
+      Кнопка <b>A</b> — следующее оружие, <b>B</b> — предыдущее. Лук: держи курок и отпускай.<br>
+      <b>На компьютере:</b> WASD — ходьба, мышь с зажатой кнопкой — обзор, клик — удар (у лука — зажать и отпустить),
+      Shift или правая кнопка — блок, <b>1–6</b> / Q / E / колесо — оружие, M — звук.
+    </div>
+    <div id="tools">
+      <button class="btn" id="shareBtn">👁 Пригласить зрителя</button>
+      <button class="btn" id="soundBtn">🔊 Звук</button>
+      <button class="btn" id="watchBtn">Я зритель</button>
+    </div>
+    <div id="shareBox">
+      <div>Отправь другу эту ссылку или код. Страницу с игрой нужно держать открытой.</div>
+      <input id="shareLink" readonly>
+      <div>Код: <span id="shareCode">------</span></div>
+      <button class="btn" id="copyBtn">Скопировать ссылку</button>
+      <div id="viewers" style="margin-top:6px">Зрителей: 0</div>
+    </div>
+    <div id="watchBox">
+      <div>Введи код игрока:</div>
+      <input id="watchCode" maxlength="6" placeholder="ABC123">
+      <button class="btn" id="watchGo">Смотреть</button>
     </div>
   </div>
   <div id="msg"></div>
+  <div id="gStatus">Подключение…</div>
+  <div id="guestBar">
+    <button class="btn on" id="vFollow">Вид сзади</button>
+    <button class="btn" id="vFirst">Глазами игрока</button>
+    <button class="btn" id="vFree">Свободная камера</button>
+  </div>
+  <div id="gOverlay">
+    <h2>Режим зрителя</h2>
+    <p id="gText">Ты смотришь, как играет другой человек. Нажми, чтобы включить звук и начать.</p>
+    <button class="btn" id="gStart" style="font-size:18px;padding:12px 24px">▶ Смотреть</button>
+  </div>
   <script type="module" src="./main.js"></script>
 </body>
 </html>
