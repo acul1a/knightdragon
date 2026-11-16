@@ -104,6 +104,13 @@ const state = {
   radius: 11, inTower: false, tower: null, ending: false,
   flame: null, mode: 'play', timer: 0, nextId: 1,
 };
+const DIFF = {
+  easy:   { name: 'Лёгкая',  spd: 0.85, wind: 1.2, hp: 0.8, poise: 0.5, combo: 0, counter: 0.1, dodge: 0,   lunge: 0 },
+  normal: { name: 'Обычная', spd: 1,    wind: 1,   hp: 1,   poise: 1,   combo: 1, counter: 0.4, dodge: 0.12, lunge: 0.5 },
+  mega:   { name: 'МЕГА',    spd: 1.3,  wind: 0.7, hp: 1.6, poise: 1.7, combo: 2, counter: 0.9, dodge: 0.5,  lunge: 1 },
+};
+state.diff = 'mega';
+try { const d = localStorage.getItem('kd_diff'); if (DIFF[d]) state.diff = d; } catch (e) { /* ignore */ }
 const head = new THREE.Vector3();
 const tmp = new THREE.Vector3();
 const tmp2 = new THREE.Vector3();
@@ -610,33 +617,85 @@ function makeEnemy(type, cfg = {}, boss = false) {
   bar.scale.setScalar(boss ? Math.max(1.4, scale) : 1);
   scene.add(bar);
 
-  const maxHp = spec.hp * (cfg.hpMul || 1);
+  const D = DIFF[state.diff] || DIFF.mega;
+  const maxHp = spec.hp * (cfg.hpMul || 1) * D.hp;
+  const poiseMax = (boss ? 150 : 65) * D.poise * Math.max(1, scale * 0.8);
   return {
     id: 0, type, spec, root, model: built.model, arm: built.arm, mouth: built.mouth, headG: built.headG, jaw: built.jaw, tick: built.tick,
     skin, cloth, bar, fill, scale, boss,
     name: cfg.name || spec.name, hp: maxHp, maxHp,
     reach: spec.reach * scale,
     fire: !!spec.fire, blocks: !!spec.blocks, phases: !!spec.phases, phase: 0,
-    speedMul: 1, windMul: 1, breathCd: 4 + Math.random() * 3,
+    speedMul: D.spd, windMul: D.wind, breathCd: 4 + Math.random() * 3,
     st: 'chase', t: 0, stun: 0, dead: false, resolved: false, deadT: 0, walk: 0, flashT: 0,
     burn: 0, freeze: 0, vuln: 0, burnSfx: 0, stepT: Math.random() * 0.5,
     armAngle: ARM_IDLE, headTilt: 0, jawOpen: 0, warn: 0, hover: spec.hover || 0,
+    gait: Math.random() * 6, wb: 0, armD: ARM_IDLE, k: 0, hitK: 0, lt: 0,
+    kv: new THREE.Vector3(), poise: poiseMax, poiseMax, combo: 0, lungeCd: 3 + Math.random() * 3, dodgeCd: 0, frzImm: 0, spreadT: 0, fx: null, strafe: Math.random() < 0.5 ? 1 : -1,
   };
+}
+
+// эффекты на враге: лёд и пламя (общие для хоста и зрителя)
+function enemyFx(e) {
+  if (e.fx) return e.fx;
+  const h = e.spec.height;
+  const ice = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0xaee8ff, emissive: 0x3aa8e0, emissiveIntensity: 0.5, transparent: true, opacity: 0.5, roughness: 0.1, metalness: 0.2 }));
+  ice.scale.set(Math.max(0.6, e.spec.hitR * 1.25), h * 0.58, Math.max(0.6, e.spec.hitR * 1.25));
+  ice.position.y = h * 0.52;
+  ice.visible = false;
+  const spikes = [];
+  for (let i = 0; i < 6; i++) {
+    const sp = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.5, 5), new THREE.MeshStandardMaterial({ color: 0xdff6ff, emissive: 0x66ccff, emissiveIntensity: 0.6, transparent: true, opacity: 0.85 }));
+    const a = i * 1.05; sp.position.set(Math.cos(a) * e.spec.hitR * 0.9, h * (0.2 + (i % 3) * 0.25), Math.sin(a) * e.spec.hitR * 0.9);
+    sp.rotation.set(Math.sin(a) * 0.8, 0, -Math.cos(a) * 0.8);
+    ice.add(sp); spikes.push(sp);
+  }
+  spikes.forEach((sp) => sp.scale.set(1 / ice.scale.x, 1 / ice.scale.y, 1 / ice.scale.z));
+  const fire = new THREE.Group(); fire.visible = false;
+  const fm = new THREE.MeshBasicMaterial({ color: 0xff7a18, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false });
+  const fm2 = new THREE.MeshBasicMaterial({ color: 0xffd060, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
+  const fl = [];
+  for (let i = 0; i < 6; i++) {
+    const c = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.7, 6), i % 2 ? fm : fm2);
+    const a = i * 1.05; c.position.set(Math.cos(a) * e.spec.hitR * 0.7, h * (0.15 + (i % 3) * 0.28), Math.sin(a) * e.spec.hitR * 0.7);
+    fire.add(c); fl.push(c);
+  }
+  e.model.add(ice, fire);
+  e.fx = { ice, fire, fl };
+  return e.fx;
 }
 
 // одинаково для хоста и зрителя: расставить модель по полям состояния
 function poseEnemy(e, time) {
-  e.arm.rotation.x = e.armAngle;
-  if (e.headG) e.headG.rotation.x = -e.headTilt;
-  if (e.jaw) e.jaw.rotation.x = e.jawOpen;
-  e.model.position.y = e.hover + (e.walk ? Math.abs(Math.sin(time * 9)) * 0.06 : 0) + (e.hover ? Math.sin(time * 3 + e.id) * 0.06 : 0);
-  e.model.rotation.x = e.dead ? -Math.min(Math.PI / 2, e.deadT * 3) : 0;
+  const dt = e.lt ? clamp(time - e.lt, 0, 0.1) : 0.016;
+  e.lt = time;
+  const frozen = e.freeze > 0 && !e.dead;
+  const moving = e.walk && !frozen;
+  e.wb += ((moving ? 1 : 0) - e.wb) * (1 - Math.exp(-dt * 7));
+  if (moving) e.gait += dt * (3 + e.spec.speed * e.speedMul * 2.4);
+  e.armD += (e.armAngle - e.armD) * (1 - Math.exp(-dt * (frozen ? 0 : 20)));
+  e.k = clamp((ARM_IDLE - e.armD) / (ARM_IDLE - ARM_UP), 0, 1);
+  e.hitK += ((e.flashT > 0 ? 1 : 0) - e.hitK) * (1 - Math.exp(-dt * 14));
+  e.arm.rotation.x = e.armD;
+  e.model.position.y = e.hover + (e.hover ? Math.sin(time * 3 + e.id) * 0.06 : 0);
+  if (e.dead) {
+    if (e.spec.deadStyle === 'flip') { e.model.rotation.z = Math.min(Math.PI, e.deadT * 5); e.model.rotation.x = 0; e.model.position.y += Math.sin(Math.min(1, e.deadT * 5) * Math.PI) * 0.25; }
+    else { e.model.rotation.x = -Math.min(Math.PI / 2, e.deadT * 3); e.model.rotation.z = 0; }
+  } else { e.model.rotation.x = 0; e.model.rotation.z = 0; }
   if (e.flashT > 0) { e.skin.emissive.setHex(0xffffff); e.skin.emissiveIntensity = 0.7; }
   else if (e.burn > 0) { const p = 0.5 + 0.5 * Math.sin(time * 18); e.skin.emissive.setRGB(0.9 * p, 0.3 * p, 0); e.skin.emissiveIntensity = 1; }
   else if (e.freeze > 0) { e.skin.emissive.setRGB(0.15, 0.4, 0.6); e.skin.emissiveIntensity = 1; }
   else { e.skin.emissive.setHex(0x000000); e.skin.emissiveIntensity = 1; }
   e.cloth.emissive.setRGB(e.warn, e.warn * (e.st === 'breath' ? 0.4 : 0), 0);
   if (e.tick) e.tick(time, e);
+  if (e.burn > 0 || e.freeze > 0 || e.fx) {
+    const fx = enemyFx(e);
+    fx.ice.visible = frozen;
+    if (frozen) { const p = 1 + 0.02 * Math.sin(time * 12); fx.ice.scale.y = e.spec.height * 0.58 * p; }
+    const burning = e.burn > 0 && !e.dead;
+    fx.fire.visible = burning;
+    if (burning) fx.fl.forEach((c, i) => { c.scale.y = 0.8 + 0.6 * Math.abs(Math.sin(time * 11 + i * 1.7)); c.scale.x = c.scale.z = 0.8 + 0.3 * Math.sin(time * 9 + i); c.position.y += (Math.sin(time * 7 + i) * 0.002); });
+  }
   if (e.dead) { e.bar.visible = false; return; }
   e.bar.visible = true;
   e.bar.position.set(e.root.position.x, e.spec.height * e.scale + 0.45, e.root.position.z);
@@ -748,26 +807,72 @@ function levelClearCheck() {
 
 function makePrincess() {
   const g = new THREE.Group();
-  const dress = new THREE.MeshStandardMaterial({ color: 0xff8fc0, roughness: 0.7 });
-  const skinM = new THREE.MeshStandardMaterial({ color: 0xf2c6a0, roughness: 0.8 });
-  const hair = new THREE.MeshStandardMaterial({ color: 0xe8b84a, roughness: 0.6 });
-  const goldM = new THREE.MeshStandardMaterial({ color: 0xffd24a, metalness: 0.8, roughness: 0.3 });
-  const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); return m; };
-  add(g, new THREE.ConeGeometry(0.52, 1.1, 16), dress, 0, 0.55, 0);
-  add(g, new THREE.SphereGeometry(0.2, 12, 10), dress, 0, 1.15, 0);
-  add(g, new THREE.SphereGeometry(0.19, 14, 12), skinM, 0, 1.46, 0);
-  const back = add(g, new THREE.SphereGeometry(0.22, 12, 10), hair, 0, 1.5, -0.06); back.scale.set(1, 1.05, 1);
-  add(g, new THREE.CylinderGeometry(0.17, 0.08, 0.7, 8), hair, 0, 1.1, -0.17);
-  add(g, new THREE.TorusGeometry(0.14, 0.018, 6, 16), goldM, 0, 1.68, 0, Math.PI / 2, 0, 0);
-  for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; add(g, new THREE.ConeGeometry(0.03, 0.12, 4), goldM, Math.cos(a) * 0.14, 1.76, Math.sin(a) * 0.14); }
-  add(g, new THREE.SphereGeometry(0.025, 6, 6), new THREE.MeshBasicMaterial({ color: 0x222233 }), -0.07, 1.48, 0.17);
-  add(g, new THREE.SphereGeometry(0.025, 6, 6), new THREE.MeshBasicMaterial({ color: 0x222233 }), 0.07, 1.48, 0.17);
-  add(g, new THREE.CylinderGeometry(0.045, 0.04, 0.5, 6), skinM, -0.26, 1.0, 0.05, 0.2, 0, 0.3);
-  const wave = new THREE.Group();
-  wave.position.set(0.24, 1.2, 0.02);
-  add(wave, new THREE.CylinderGeometry(0.045, 0.04, 0.5, 6), skinM, 0, 0.22, 0);
-  g.add(wave);
-  return { g, wave, stage: 0 };
+  const M = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6, ...o });
+  const dress = M(0xe0559a, { roughness: 0.45, metalness: 0.05 }), dress2 = M(0xff9acb, { roughness: 0.5 });
+  const lace = M(0xfff4fa, { roughness: 0.8 }), skinM = M(0xf6cfae, { roughness: 0.7 });
+  const hair = M(0xf0b840, { roughness: 0.4, metalness: 0.15 }), goldM = M(0xffd24a, { metalness: 0.85, roughness: 0.25 });
+  const gem = M(0x4ac8ff, { emissive: 0x1a78c8, emissiveIntensity: 0.7, roughness: 0.1 }), ruby = M(0xff3060, { emissive: 0x801030, emissiveIntensity: 0.6, roughness: 0.1 });
+  const dark = new THREE.MeshBasicMaterial({ color: 0x2a2038 }), white = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const add = (parent, geo, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); return m; };
+
+  // пышная юбка (поверхность вращения) с оборкой снизу
+  const prof = [[0.0, 0], [0.62, 0], [0.64, 0.05], [0.58, 0.12], [0.5, 0.3], [0.4, 0.55], [0.3, 0.8], [0.2, 0.98], [0.15, 1.04], [0, 1.05]].map(([r, y]) => new THREE.Vector2(r, y));
+  add(g, new THREE.LatheGeometry(prof, 28), dress, 0, 0, 0);
+  const prof2 = [[0.0, 0], [0.7, 0], [0.72, 0.04], [0.68, 0.1], [0.0, 0.1]].map(([r, y]) => new THREE.Vector2(r, y));
+  add(g, new THREE.LatheGeometry(prof2, 28), lace, 0, 0.0, 0);
+  const over = new THREE.LatheGeometry([[0.0, 0.05], [0.5, 0.05], [0.42, 0.45], [0.3, 0.8], [0.18, 1.0], [0, 1.0]].map(([r, y]) => new THREE.Vector2(r, y)), 20, 0, Math.PI * 0.9);
+  add(g, over, dress2, 0, 0, 0, 0, Math.PI * 0.55, 0);                                // светлая вставка спереди
+  for (let i = 0; i < 5; i++) { const a = (i - 2) * 0.35; add(g, new THREE.SphereGeometry(0.03, 6, 6), gem, Math.sin(a) * 0.4, 0.35 + Math.abs(i - 2) * -0.02, Math.cos(a) * 0.4); }
+  // корсаж, пояс-бант
+  add(g, new THREE.CylinderGeometry(0.15, 0.17, 0.3, 14), dress, 0, 1.2, 0);
+  add(g, new THREE.CylinderGeometry(0.175, 0.175, 0.05, 14), goldM, 0, 1.06, 0);
+  add(g, new THREE.SphereGeometry(0.06, 8, 8), ruby, 0, 1.08, 0.17);
+  for (const s of [-1, 1]) add(g, new THREE.ConeGeometry(0.08, 0.22, 4), dress2, s * 0.1, 1.08, -0.2, 0.5, 0, s * 1.2);   // бант сзади
+  // плечи, шея, декольте, ожерелье
+  add(g, new THREE.CylinderGeometry(0.045, 0.05, 0.1, 8), skinM, 0, 1.4, 0);
+  add(g, new THREE.TorusGeometry(0.08, 0.011, 6, 18), goldM, 0, 1.36, 0.02, Math.PI / 2 + 0.3, 0, 0);
+  add(g, new THREE.SphereGeometry(0.02, 8, 8), gem, 0, 1.31, 0.085);
+  // голова
+  const head = add(g, new THREE.SphereGeometry(0.17, 20, 16), skinM, 0, 1.56, 0.0); head.scale.set(0.95, 1.05, 0.98);
+  for (const s of [-1, 1]) {
+    add(g, new THREE.SphereGeometry(0.036, 10, 8), white, s * 0.065, 1.575, 0.14).scale.set(1, 1.15, 0.5);
+    add(g, new THREE.SphereGeometry(0.024, 10, 8), M(0x2a78d8, { roughness: 0.2 }), s * 0.065, 1.572, 0.155).scale.set(1, 1.1, 0.5);
+    add(g, new THREE.SphereGeometry(0.012, 8, 6), dark, s * 0.065, 1.572, 0.165);
+    add(g, new THREE.BoxGeometry(0.06, 0.008, 0.01), dark, s * 0.065, 1.62, 0.14, 0, 0, s * 0.15);          // ресницы
+    add(g, new THREE.SphereGeometry(0.025, 8, 6), M(0xff9aa8, { roughness: 1 }), s * 0.1, 1.52, 0.125).scale.set(1, 0.6, 0.3);   // румянец
+  }
+  add(g, new THREE.SphereGeometry(0.014, 8, 6), skinM, 0, 1.54, 0.17);
+  add(g, new THREE.TorusGeometry(0.03, 0.006, 6, 12, Math.PI), M(0xd04058, { roughness: 0.5 }), 0, 1.5, 0.16, 0, 0, Math.PI);    // улыбка
+  // причёска: объём, чёлка, длинные волосы, коса
+  const cap = add(g, new THREE.SphereGeometry(0.19, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62), hair, 0, 1.58, -0.015);
+  add(g, new THREE.SphereGeometry(0.06, 10, 8), hair, -0.1, 1.64, 0.12).scale.set(1.3, 0.8, 0.8);
+  add(g, new THREE.SphereGeometry(0.06, 10, 8), hair, 0.08, 1.65, 0.125).scale.set(1.3, 0.8, 0.8);
+  const longHair = add(g, new THREE.CapsuleGeometry(0.15, 0.55, 6, 14), hair, 0, 1.22, -0.12); longHair.scale.set(1.05, 1, 0.55);
+  for (const s of [-1, 1]) add(g, new THREE.CapsuleGeometry(0.04, 0.5, 4, 8), hair, s * 0.17, 1.28, 0.0, 0, 0, s * 0.06);   // локоны у лица
+  const braid = new THREE.Group(); braid.position.set(0.12, 1.5, -0.13); g.add(braid);
+  for (let i = 0; i < 6; i++) add(braid, new THREE.SphereGeometry(0.045 - i * 0.003, 8, 6), hair, 0.02 * i, -0.1 * i - 0.05, -0.0 - 0.01 * i);
+  add(braid, new THREE.SphereGeometry(0.028, 8, 6), ruby, 0.12, -0.65, -0.06);
+  // корона
+  add(g, new THREE.TorusGeometry(0.15, 0.016, 8, 24), goldM, 0, 1.7, 0, Math.PI / 2, 0, 0);
+  for (let i = 0; i < 7; i++) { const a = (i / 7) * Math.PI * 2; const h = i % 2 ? 0.1 : 0.15; add(g, new THREE.ConeGeometry(0.026, h, 5), goldM, Math.sin(a) * 0.15, 1.7 + h / 2, Math.cos(a) * 0.15); if (!(i % 2)) add(g, new THREE.SphereGeometry(0.02, 8, 6), gem, Math.sin(a) * 0.15, 1.7 + h, Math.cos(a) * 0.15); }
+  add(g, new THREE.SphereGeometry(0.03, 8, 8), ruby, 0, 1.71, 0.15);
+  // накидка-шлейф сзади
+  add(g, new THREE.PlaneGeometry(0.55, 1.2), M(0xa0306a, { side: THREE.DoubleSide, roughness: 0.6 }), 0, 0.85, -0.26, -0.12, 0, 0);
+  // ножки (туфельки)
+  for (const s of [-1, 1]) add(g, new THREE.SphereGeometry(0.06, 8, 6), goldM, s * 0.12, 0.04, 0.4).scale.set(1, 0.6, 1.6);
+  // руки: пышные рукава, предплечья, ладони
+  const arm = (side) => {
+    const a = new THREE.Group();
+    add(a, new THREE.SphereGeometry(0.075, 10, 8), dress2, 0, 0, 0);
+    add(a, new THREE.CylinderGeometry(0.038, 0.032, 0.4, 8), skinM, 0, -0.22, 0);
+    add(a, new THREE.CylinderGeometry(0.052, 0.045, 0.1, 10), lace, 0, -0.1, 0);
+    add(a, new THREE.SphereGeometry(0.04, 8, 8), skinM, 0, -0.44, 0);
+    return a;
+  };
+  const armL = arm(); armL.position.set(0.25, 1.33, 0.02); armL.rotation.z = -0.2; armL.rotation.x = -0.2; g.add(armL);
+  const wave = arm(); wave.position.set(-0.25, 1.33, 0.02); g.add(wave);
+  wave.rotation.z = -0.3;
+  return { g, wave, stage: 0, hair: [braid, longHair] };
 }
 
 function enterTower() {
@@ -795,6 +900,7 @@ function updateTower(dt, time) {
   if (T.stage >= 1) { T.ry = Math.atan2(tmp.x, tmp.z); pg.rotation.y = T.ry; }
   T.pr.wave.rotation.z = T.stage >= 1 ? -2.4 + 0.35 * Math.sin(time * 6) : -0.3;
   pg.position.y = 0.25 + Math.abs(Math.sin(time * 2)) * 0.02;
+  if (T.pr.hair) { T.pr.hair[0].rotation.z = Math.sin(time * 1.8) * 0.08; T.pr.hair[0].rotation.x = Math.sin(time * 1.3) * 0.05; }
   T.t += dt;
   if (T.stage >= 1 && Math.random() < dt * 5) fxSpark(pg.position.x + (Math.random() - 0.5) * 0.8, 1.3 + Math.random() * 0.5, pg.position.z + (Math.random() - 0.5) * 0.8, 5, 1, 0.4, -1.2);
   if (T.stage === 0 && dist < 2.4) { T.stage = 1; T.t = 0; say(PRINCESS_LINES[0]); }
@@ -890,13 +996,23 @@ function killEnemy(g) {
   drawHud();
 }
 
+function igniteEnemy(g, secs) {
+  if (g.dead || g.type === 'fire') return;
+  if (g.freeze > 0) { g.freeze = 0; fxSpark(g.root.position.x, 1.0 * g.scale, g.root.position.z, 1, 10, 3, 3); return; }   // огонь растапливает лёд
+  if (g.burn <= 0) sfx('burn', g.root.position.x, g.root.position.z);
+  g.burn = Math.max(g.burn, secs); g.burnSfx = 0;
+}
+
 function damageEnemy(g, dmgRaw, W = {}) {
+  const D = DIFF[state.diff] || DIFF.mega;
   let dmg = dmgRaw * (g.boss ? state.stats.bossDmg : 1);
   if (g.vuln > 0) dmg *= 1.3;
+  const wasFrozen = g.freeze > 0;
+  if (wasFrozen && W.elem !== 'ice') dmg *= 1.25;
   let guarded = false;
   if (g.blocks && g.st === 'chase' && !W.breakArmor && Math.random() < 0.5) {
     guarded = true; dmg *= 0.15;
-    g.st = 'windup'; g.t = 0.4; g.resolved = false;
+    g.st = 'windup'; g.t = 0.2; g.resolved = false;
     showMessage('Рыцарь блокирует!', 0.8);
   }
   g.hp -= dmg;
@@ -911,12 +1027,21 @@ function damageEnemy(g, dmgRaw, W = {}) {
   haptic('right', 0.9, 120);
   g.flashT = 0.12;
 
+  // --- стихии
   if (!guarded) {
-    if (W.elem === 'fire') { g.burn = W.burn; g.burnSfx = 0; }
-    if (W.elem === 'ice') { g.freeze = W.freeze; }
+    if (W.elem === 'fire') igniteEnemy(g, W.burn);
+    if (W.elem === 'ice' && g.frzImm <= 0) {                              // ХОЛОД: враг замерзает во льду
+      const dur = g.boss ? W.freeze * 0.5 : W.freeze;
+      g.freeze = dur; g.frzImm = dur + (g.boss ? 5 : 1.5); g.burn = 0;
+      g.st = 'chase'; g.t = 0; g.resolved = true; g.stun = 0; g.combo = 0;
+      sfx('freeze', px, pz); fxSpark(px, py, pz, 1, 16, 3, 2);
+    }
+    if (wasFrozen && W.elem === 'hammer') {                                // молот разбивает лёд
+      g.freeze = 0; g.hp -= 25; sfx('freeze', px, pz); fxSpark(px, py, pz, 1, 24, 5, 4);
+    }
     if (W.breakArmor) g.vuln = W.breakArmor;
   }
-  if (g.hp <= 0) { killEnemy(g); return; }
+  if (g.hp <= 0) { killEnemy(g); drawHud(); return; }
   if (g.phases) {
     const pct = g.hp / g.maxHp;
     const np = pct < 0.33 ? 2 : pct < 0.66 ? 1 : 0;
@@ -926,12 +1051,40 @@ function damageEnemy(g, dmgRaw, W = {}) {
       showMessage('Дракон в ярости!\nФаза ' + (np + 1) + ' из 3', 3);
     }
   }
-  if (!guarded) {
-    tmp.subVectors(g.root.position, head); tmp.y = 0; tmp.normalize();
-    const kb = (g.boss ? 0.2 : 0.5) * (W.knock || 1);
-    g.root.position.addScaledVector(tmp, kb);
-    if (g.st !== 'breath' || !g.boss) { g.st = 'recover'; g.t = g.boss ? 0.2 : -0.3; }
-    g.stun = W.stun || (g.boss ? 0.15 : 0.4);
+  if (guarded) { drawHud(); return; }
+
+  // --- отбрасывание (ВЕТЕР отбрасывает далеко и сбивает с ног)
+  tmp.subVectors(g.root.position, head); tmp.y = 0; tmp.normalize();
+  const resist = (g.boss ? 0.35 : 1) / Math.max(1, g.scale * 0.8);
+  let kv = (W.elem === 'wind' ? 12 : W.elem === 'hammer' ? 6 : 2.2) * resist * (wasFrozen ? 0.25 : 1);
+  g.kv.addScaledVector(tmp, kv);
+  if (W.elem === 'wind') {
+    sfx('gust', px, pz);
+    for (const o of state.enemies) {                                      // порыв задевает и соседей
+      if (o === g || o.dead) continue;
+      if (Math.hypot(o.root.position.x - px, o.root.position.z - pz) < 2.4) {
+        const r2 = (o.boss ? 0.35 : 1) / Math.max(1, o.scale * 0.8);
+        o.kv.addScaledVector(tmp, kv * 0.6 * r2 / resist);
+        if (!o.boss && o.freeze <= 0) { o.st = 'recover'; o.t = -0.3; o.stun = 0.4; o.resolved = true; }
+        fxSpark(o.root.position.x, 1.0 * o.scale, o.root.position.z, 2, 6, 3, 4);
+      }
+    }
+  }
+
+  // --- стойка: слабые удары не сбивают врага — он продолжает атаку и бьёт в ответ
+  g.poise -= (W.poiseDmg || 1) * dmg;
+  const windStagger = W.elem === 'wind' && !g.boss;
+  const broke = g.poise <= 0 || windStagger || (W.stun && W.stun > 0.5 && g.poise < g.poiseMax * 0.6);
+  if (broke) {
+    g.poise = g.poiseMax * 0.7;
+    g.st = 'recover'; g.t = -0.3; g.resolved = true; g.combo = 0;
+    g.stun = W.stun || (g.boss ? 0.2 : 0.45);
+  } else if (g.st === 'chase' && g.stun <= 0) {
+    tmp.subVectors(head, g.root.position); tmp.y = 0;
+    if (tmp.length() < g.reach + 0.9 && Math.random() < D.counter) {     // мгновенная контратака
+      g.st = 'windup'; g.t = g.spec.windup * g.windMul * 0.5; g.resolved = false; g.combo = D.combo;
+      sfx('voice', px, pz, { t: g.type, k: 'atk' });
+    }
   }
   drawHud();
 }
@@ -1024,65 +1177,118 @@ function updateArrows(dt) {
 }
 
 // ---------------------------------------------------------------- ИИ врага (хост)
+const LUNGERS = new Set(['spider', 'dark', 'elite', 'fire', 'goblin', 'bog']);
+
 function updateEnemy(g, dt, time) {
+  const D = DIFF[state.diff] || DIFF.mega;
   if (g.flashT > 0) g.flashT -= dt;
   if (g.dead) { g.deadT += dt; poseEnemy(g, time); return; }
 
   if (g.vuln > 0) g.vuln -= dt;
-  if (g.freeze > 0) g.freeze -= dt;
+  if (g.frzImm > 0) g.frzImm -= dt;
+  if (g.dodgeCd > 0) g.dodgeCd -= dt;
+  g.lungeCd -= dt;
+  // скорость отбрасывания (ветер)
+  if (g.kv.lengthSq() > 0.01) {
+    g.root.position.x += g.kv.x * dt; g.root.position.z += g.kv.z * dt;
+    g.kv.multiplyScalar(Math.exp(-dt * 5));
+    const rr = Math.hypot(g.root.position.x, g.root.position.z);
+    if (rr > state.radius) { g.root.position.x *= state.radius / rr; g.root.position.z *= state.radius / rr; }
+  }
   if (g.burn > 0) {
     g.burn -= dt;
-    g.hp -= 9 * dt * (g.boss ? state.stats.bossDmg : 1);
+    g.hp -= 12 * dt * (g.boss ? state.stats.bossDmg : 1);
     g.burnSfx -= dt;
     if (g.burnSfx <= 0) { g.burnSfx = 0.9; sfx('burn', g.root.position.x, g.root.position.z); fxSpark(g.root.position.x, 1.2 * g.scale, g.root.position.z, 0, 3, 1.2, -1); }
+    g.spreadT -= dt;
+    if (g.spreadT <= 0) {                                                  // огонь перекидывается на соседей
+      g.spreadT = 0.7;
+      for (const o of state.enemies) {
+        if (o === g || o.dead || o.burn > 0) continue;
+        if (Math.hypot(o.root.position.x - g.root.position.x, o.root.position.z - g.root.position.z) < 1.8 * Math.max(g.scale, o.scale)) igniteEnemy(o, 2.5);
+      }
+    }
     if (g.hp <= 0) { killEnemy(g); poseEnemy(g, time); return; }
+  }
+  g.walk = 0;
+  if (g.freeze > 0) {                                                      // заморожен: не двигается и не атакует
+    g.freeze -= dt; g.warn = 0;
+    if (g.freeze <= 0) { sfx('freeze', g.root.position.x, g.root.position.z); fxSpark(g.root.position.x, 1.0 * g.scale, g.root.position.z, 1, 14, 3, 3); g.st = 'chase'; g.t = 0; }
+    poseEnemy(g, time);
+    return;
   }
 
   tmp.subVectors(head, g.root.position); tmp.y = 0;
   const dist = tmp.length();
+  const fwd = tmp.clone().normalize();
   let dy = Math.atan2(tmp.x, tmp.z) - g.root.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-  g.root.rotation.y += dy * Math.min(1, dt * 8);
+  g.root.rotation.y += dy * Math.min(1, dt * (g.st === 'strike' || g.st === 'lunge' ? 3 : 9));
 
-  g.warn = (g.st === 'windup' || g.st === 'breath') ? 0.4 + 0.4 * Math.sin(time * 30) : 0;
-  g.walk = 0;
+  g.warn = (g.st === 'windup' || g.st === 'breath' || g.st === 'lunge') ? 0.4 + 0.4 * Math.sin(time * 30) : 0;
   if (g.stun > 0) g.stun -= dt;
   g.breathCd -= dt;
-  const chill = g.freeze > 0;
-  const speed = g.spec.speed * g.speedMul * (chill ? 0.5 : 1);
-  const windup = g.spec.windup * g.windMul * (chill ? 1.4 : 1);
+  if (g.st !== 'recover') g.poise = Math.min(g.poiseMax, g.poise + 12 * dt);
+  const speed = g.spec.speed * g.speedMul;
+  const windup = g.spec.windup * g.windMul;
   let armTarget = ARM_IDLE;
+  const stepSfx = (rate) => { g.stepT -= dt; if (g.stepT <= 0 && dist < 14) { g.stepT = 0.5 / rate; sfx('step', g.root.position.x, g.root.position.z, { h: g.scale }); } };
 
   switch (g.st) {
-    case 'chase':
+    case 'chase': {
       if (g.stun > 0) break;
       if (g.fire && g.breathCd <= 0 && dist > g.reach + 1.0 && dist < 16) {
         g.st = 'breath'; g.t = 0;
         sfx('voice', g.root.position.x, g.root.position.z, { t: g.type, k: 'alert' });
         break;
       }
+      const perp = tmp2.set(fwd.z, 0, -fwd.x);
+      if (LUNGERS.has(g.type) && !g.boss && D.lunge > 0 && g.lungeCd <= 0 && dist > 2.4 && dist < 6 && Math.random() < D.lunge * dt * 3) {
+        g.st = 'lunge'; g.t = 0; g.resolved = false; g.lungeCd = (3.5 + Math.random() * 3) / D.lunge;
+        sfx('voice', g.root.position.x, g.root.position.z, { t: g.type, k: 'alert' });
+        break;
+      }
+      if (D.dodge > 0 && swordSpeed > 4.5 && dist < g.reach + 1.8 && g.dodgeCd <= 0 && Math.random() < D.dodge * dt * 5) {
+        g.kv.addScaledVector(perp, g.strafe * 6 * (g.boss ? 0.5 : 1)); g.dodgeCd = 1.5;
+        g.strafe = -g.strafe;
+      }
       if (dist > g.reach) {
-        tmp.normalize();
-        g.root.position.addScaledVector(tmp, speed * dt);
+        const orbit = dist < 7 ? 0.5 : 0;
+        const dir = tmp.copy(fwd).addScaledVector(perp, g.strafe * orbit * Math.sin(time * 0.9 + g.id)).normalize();
+        g.root.position.addScaledVector(dir, speed * dt);
         g.walk = 1;
-        g.stepT -= dt;
-        if (g.stepT <= 0 && dist < 14) { g.stepT = 0.5 / (speed / 1.3); sfx('step', g.root.position.x, g.root.position.z, { h: g.scale }); }
+        stepSfx(speed / 1.3);
       } else {
-        g.st = 'windup'; g.t = 0; g.resolved = false;
+        g.st = 'windup'; g.t = 0; g.resolved = false; g.combo = D.combo + (g.boss ? 1 : 0);
         sfx('voice', g.root.position.x, g.root.position.z, { t: g.type, k: 'atk' });
       }
       break;
+    }
     case 'windup':
       g.t += dt;
       armTarget = lerp(ARM_IDLE, ARM_UP, g.t / windup);
+      if (dist > g.reach * 0.85) { g.root.position.addScaledVector(fwd, speed * 0.7 * dt); g.walk = 1; }   // подшаг к игроку
       if (g.t >= windup) { g.st = 'strike'; g.t = 0; }
       break;
     case 'strike':
       g.t += dt;
       armTarget = lerp(ARM_UP, ARM_HIT, g.t / 0.12);
       if (!g.resolved && g.t >= 0.1) { g.resolved = true; if (state.mode === 'play') resolveStrike(g); }
-      if (g.t >= 0.3) { g.st = 'recover'; g.t = 0; }
+      if (g.t >= 0.3) {
+        if (g.combo > 0 && g.st === 'strike' && dist < g.reach + 1.3) { g.combo--; g.st = 'windup'; g.t = windup * 0.55; g.resolved = false; }   // КОМБО
+        else { g.st = 'recover'; g.t = 0; }
+      }
       break;
+    case 'lunge': {                                                         // прыжок/рывок: присел → бросок
+      g.t += dt;
+      if (g.t < 0.3) { armTarget = lerp(ARM_IDLE, ARM_UP * 0.6, g.t / 0.3); }
+      else if (g.t < 0.7) {
+        armTarget = ARM_HIT; g.walk = 1;
+        g.root.position.addScaledVector(fwd, speed * 4.2 * dt);
+        if (!g.resolved && dist < g.reach * 0.9) { g.resolved = true; if (state.mode === 'play') resolveStrike(g); }
+      } else { g.st = 'recover'; g.t = 0.1; }
+      break;
+    }
     case 'breath': {                                 // огонь идёт из ПАСТИ: голова поднимается, челюсть открывается
       g.t += dt;
       const p = Math.min(1, g.t / 1.3);
@@ -1090,7 +1296,7 @@ function updateEnemy(g, dt, time) {
       else armTarget = lerp(ARM_IDLE, ARM_UP, p);
       if (g.t >= 1.3) {
         if (state.mode === 'play') resolveBreath(g);
-        g.breathCd = Math.max(3, 8 - g.phase * 2) + Math.random() * 2;
+        g.breathCd = Math.max(2.5, 7 - g.phase * 2) + Math.random() * 2;
         g.st = 'recover'; g.t = 0;
       }
       break;
@@ -1098,7 +1304,7 @@ function updateEnemy(g, dt, time) {
     case 'recover':
       g.t += dt;
       armTarget = lerp(ARM_HIT, ARM_IDLE, Math.max(0, g.t) / 0.5);
-      if (g.t >= 1.1) g.st = 'chase';
+      if (g.t >= 0.9 * D.wind + 0.15) g.st = 'chase';
       break;
     default: break;
   }
@@ -1560,6 +1766,16 @@ function wireHostUi() {
     if (host && host.code) { const b = $('shareBox'); b.style.display = b.style.display === 'block' ? 'none' : 'block'; } else startSharing();
   });
   $('soundBtn').addEventListener('click', toggleSound);
+  const diffBtn = $('diffBtn');
+  const showDiff = () => { diffBtn.textContent = '⚔ Сложность: ' + DIFF[state.diff].name.toUpperCase(); };
+  showDiff();
+  diffBtn.addEventListener('click', () => {
+    const order = ['easy', 'normal', 'mega'];
+    state.diff = order[(order.indexOf(state.diff) + 1) % 3];
+    try { localStorage.setItem('kd_diff', state.diff); } catch (e) { /* ignore */ }
+    showDiff();
+    showMessage('Сложность: ' + DIFF[state.diff].name + '\nПрименится при перезапуске уровня', 3);
+  });
   $('copyBtn').addEventListener('click', () => {
     const inp = $('shareLink');
     try { navigator.clipboard.writeText(inp.value); $('copyBtn').textContent = 'Скопировано ✓'; }
