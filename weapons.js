@@ -5,8 +5,8 @@ import * as THREE from 'three';
    во льду (молот разбивает лёд), ветер — отбрасывает врага и сбивает с ног соседей. */
 export const WEAPONS = {
   sword:  { name: 'Меч',          kind: 'melee', dmg: 1.0,  speedMin: 2.2, cd: 0.4,  elem: null },
-  hammer: { name: 'Боевой молот', kind: 'melee', dmg: 2.3,  speedMin: 2.6, cd: 0.85, elem: 'hammer', stun: 0.9, breakArmor: 4, poiseDmg: 3 },
-  bow:    { name: 'Лук',          kind: 'bow',   dmg: 1.0,  elem: null },
+  hammer: { name: 'Боевой молот', kind: 'melee', dmg: 2.3,  speedMin: 2.6, cd: 0.85, elem: 'hammer', twoHanded: true, stun: 0.9, breakArmor: 4, poiseDmg: 3 },
+  bow:    { name: 'Лук',          kind: 'bow',   dmg: 1.0,  elem: null, twoHanded: true },
   frost:  { name: 'Ледяной меч',  kind: 'melee', dmg: 1.0,  speedMin: 2.2, cd: 0.4,  elem: 'ice',  freeze: 3.6 },
   wind:   { name: 'Меч ветра',    kind: 'melee', dmg: 0.85, speedMin: 1.7, cd: 0.26, elem: 'wind', knock: 1.5, poiseDmg: 1.4 },
   fire:   { name: 'Огненный меч', kind: 'melee', dmg: 1.1,  speedMin: 2.2, cd: 0.4,  elem: 'fire', burn: 4.5 },
@@ -83,10 +83,10 @@ export function makeWeaponModel(id) {
     }
     const embers = [];
     for (let i = 0; i < 5; i++) { const em = add(g, new THREE.SphereGeometry(0.008, 4, 4), glowMat(0xffc060, 0.9), 0, 0.03, -0.3); embers.push(em); }
-    g.userData.tick = (t) => {
-      flames.forEach((f, i) => { f.scale.set(1 + 0.3 * Math.sin(t * 12 + i), 1 + 0.4 * Math.sin(t * 14 + i * 1.9), 1); f.position.y = 0.012 + 0.012 * Math.sin(t * 9 + i); });
+    g.userData.tick = (t, sp = 0) => {
+      flames.forEach((f, i) => { f.scale.set(1 + 0.3 * Math.sin(t * 12 + i), (1 + 0.4 * Math.sin(t * 14 + i * 1.9)) * (1 + sp * 2.2), 1); f.position.y = 0.012 + 0.012 * Math.sin(t * 9 + i); });
       embers.forEach((em, i) => { const p = (t * 0.8 + i * 0.2) % 1; em.position.set(Math.sin(i * 3 + t * 3) * 0.04, 0.03 + p * 0.25, -0.2 - i * 0.16); em.scale.setScalar(1 - p); });
-      lava.emissiveIntensity = 1.1 + 0.4 * Math.sin(t * 7);
+      lava.emissiveIntensity = 1.1 + 0.4 * Math.sin(t * 7) + sp * 1.2;
     };
   } else if (id === 'frost') {
     const ice = std(0xcdf3ff, { emissive: 0x4ab8e8, emissiveIntensity: 0.55, roughness: 0.08, metalness: 0.3, transparent: true, opacity: 0.9 });
@@ -100,9 +100,9 @@ export function makeWeaponModel(id) {
     for (let i = 0; i < 6; i++) crystals.push(add(g, new THREE.OctahedronGeometry(0.026), cr, (i % 2 ? 0.05 : -0.05), 0.012, -0.25 - i * 0.11, i, i * 2, 0));
     const snow = [];
     for (let i = 0; i < 6; i++) snow.push(add(g, new THREE.OctahedronGeometry(0.008), glowMat(0xffffff, 0.9), 0, 0.03, -0.3));
-    g.userData.tick = (t) => {
-      cr.emissiveIntensity = 0.6 + 0.3 * Math.sin(t * 4);
-      crystals.forEach((c, i) => { c.rotation.y = t * 0.8 + i; });
+    g.userData.tick = (t, sp = 0) => {
+      cr.emissiveIntensity = 0.6 + 0.3 * Math.sin(t * 4) + sp * 0.8;
+      crystals.forEach((c, i) => { c.rotation.y = t * (0.8 + sp * 6) + i; c.scale.setScalar(1 + sp * 0.6); });
       snow.forEach((s, i) => { const p = (t * 0.5 + i / 6) % 1; s.position.set(Math.sin(i * 2.2 + t) * 0.06, 0.02 - p * 0.18, -0.2 - i * 0.13); s.scale.setScalar(1 - p); });
     };
   } else if (id === 'wind') {
@@ -119,7 +119,7 @@ export function makeWeaponModel(id) {
     const rm = glowMat(0xaaffee, 0.35);
     const rings = [];
     for (let i = 0; i < 3; i++) rings.push(add(g, new THREE.TorusGeometry(0.06 + i * 0.012, 0.004, 5, 20), rm, 0, 0, -0.35 - i * 0.2));
-    g.userData.tick = (t) => rings.forEach((r, i) => { r.rotation.z = t * (4 + i); r.rotation.x = 0.4 * Math.sin(t * 5 + i); r.position.z = -0.35 - i * 0.2 + 0.06 * Math.sin(t * 3 + i); });
+    g.userData.tick = (t, sp = 0) => rings.forEach((r, i) => { r.rotation.z = t * (4 + i + sp * 18); r.scale.setScalar(1 + sp * 0.5); r.material.opacity = 0.35 + sp * 0.5; r.rotation.x = 0.4 * Math.sin(t * 5 + i); r.position.z = -0.35 - i * 0.2 + 0.06 * Math.sin(t * 3 + i); });
   } else if (id === 'hammer') {
     const iron = std(0x8f98a6, { roughness: 0.4 });
     add(g, new THREE.CylinderGeometry(0.025, 0.03, 0.82, 10), wood(), 0, 0, -0.34, Math.PI / 2, 0, 0);

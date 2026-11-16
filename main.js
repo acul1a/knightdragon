@@ -23,11 +23,11 @@ const hpEl = $('hp'), foeEl = $('foe'), lvlEl = $('lvl'), msgEl = $('msg'), wpnE
 
 // ---------------------------------------------------------------- награды
 const REWARDS = {
-  shield:  { name: 'Щит',              text: 'Щит стал шире!\nБлокировать легче',                  apply: (s) => { s.blockR += 0.12; } },
+  shield:  { name: 'Щит',              text: 'Щит стал шире!\nБлокировать легче',                  apply: (s) => { s.blockR += 0.12; s.guardMax += 30; } },
   bow:     { name: 'Лук и амулет',     text: 'Получен ЛУК и амулет!\n+1 сердце\nA / B — смена оружия', apply: (s) => { s.maxHp += 1; s.weapons.push('bow'); } },
   hammer:  { name: 'Боевой молот',     text: 'Боевой МОЛОТ!\nОглушает и крушит броню',            apply: (s) => { s.weapons.push('hammer'); } },
   ice:     { name: 'Ледяной меч',      text: 'ЛЕДЯНОЙ МЕЧ!\nЗамораживает врагов',                 apply: (s) => { s.weapons.push('frost'); } },
-  shield2: { name: 'Щит и меч ветра',  text: 'Усиленный щит и МЕЧ ВЕТРА!\nБыстрые удары,\nотбрасывает врагов', apply: (s) => { s.blockR += 0.12; s.weapons.push('wind'); } },
+  shield2: { name: 'Щит и меч ветра',  text: 'Усиленный щит и МЕЧ ВЕТРА!\nБыстрые удары,\nотбрасывает врагов', apply: (s) => { s.blockR += 0.12; s.guardMax += 30; s.weapons.push('wind'); } },
   fire:    { name: 'Огненный меч',     text: 'ОГНЕННЫЙ МЕЧ и амулет!\nПоджигает врагов,\nзащита от огня', apply: (s) => { s.evade += 0.3; s.weapons.push('fire'); } },
   enchant: { name: 'Зачарование',      text: 'Все клинки зачарованы!\nБольше урона по боссам',    apply: (s) => { s.bossDmg *= 1.5; } },
   gate:    { name: 'Врата башни',      text: '',                                                   apply: () => {} },
@@ -103,6 +103,7 @@ const state = {
   lastDeath: new THREE.Vector3(0, 0, -5), covers: [],
   radius: 11, inTower: false, tower: null, ending: false,
   flame: null, mode: 'play', timer: 0, nextId: 1,
+  guard: 100, guardBroken: 0, guardIdle: 0, guardT: 0,
 };
 const DIFF = {
   easy:   { name: 'Лёгкая',  spd: 0.85, wind: 1.2, hp: 0.8, poise: 0.5, combo: 0, counter: 0.1, dodge: 0,   lunge: 0 },
@@ -118,7 +119,7 @@ const lerp = (a, b, t) => a + (b - a) * Math.min(1, Math.max(0, t));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function computeStats() {
-  const s = { maxHp: 5, blockR: 0.55, evade: 0, bossDmg: 1, weapons: ['sword'] };
+  const s = { maxHp: 5, blockR: 0.55, evade: 0, bossDmg: 1, guardMax: 100, weapons: ['sword'] };
   for (const id of state.got) if (REWARDS[id]) REWARDS[id].apply(s);
   s.weapons = [...new Set(s.weapons)];
   state.stats = s;
@@ -175,12 +176,19 @@ function disposeTree(o) {
   });
 }
 
-let env = null;
+let env = null, envLive = null, liveFns = [];
+function updateEnvLive(dt, time) {
+  for (const fn of liveFns) fn(dt, time);
+  const f = (ph) => 0.82 + 0.12 * Math.sin(time * 11 + ph) + 0.06 * Math.sin(time * 27 + ph * 3);
+  torchLightA.intensity = 1.6 * f(0); torchLightB.intensity = 1.6 * f(2.1);
+}
 
 function buildEnv(cfg) {
   if (env) { scene.remove(env); disposeTree(env); }
   env = new THREE.Group();
   scene.add(env);
+  if (envLive) { scene.remove(envLive); disposeTree(envLive); }
+  envLive = new THREE.Group(); scene.add(envLive); liveFns = [];
   state.covers = [];
   state.radius = cfg.radius || 11;
 
@@ -233,10 +241,56 @@ function buildEnv(cfg) {
       state.covers.push({ x, z, r: 1.0 });
     }
   };
+  // ---- живые эффекты: огонь, светлячки/угольки/пыль, инстансы травы и т. п.
+  const flameM1 = new THREE.MeshBasicMaterial({ color: 0xff7a18, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+  const flameM2 = new THREE.MeshBasicMaterial({ color: 0xffd060, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false });
+  const addFlame = (x, y, z, sc = 1) => {
+    const g = new THREE.Group(); g.position.set(x, y, z);
+    const a = new THREE.Mesh(new THREE.ConeGeometry(0.12 * sc, 0.5 * sc, 6), flameM1); a.position.y = 0.25 * sc;
+    const b = new THREE.Mesh(new THREE.ConeGeometry(0.07 * sc, 0.35 * sc, 5), flameM2); b.position.y = 0.2 * sc;
+    g.add(a, b); envLive.add(g);
+    const ph = rnd() * 6;
+    liveFns.push((dt, t) => { const k = 1 + 0.25 * Math.sin(t * 13 + ph) + 0.12 * Math.sin(t * 23 + ph * 2); a.scale.set(0.9 / Math.sqrt(k) + 0.1, k, 1); b.scale.y = 1 + 0.3 * Math.sin(t * 17 + ph); g.rotation.y = t * 2; });
+  };
+  const motes = (n, color, size, mode, r0, r1, h) => {
+    const pos = new Float32Array(n * 3), ph = [];
+    for (let i = 0; i < n; i++) { const a = rnd() * Math.PI * 2, r = r0 + rnd() * (r1 - r0); pos[i * 3] = Math.cos(a) * r; pos[i * 3 + 1] = rnd() * h; pos[i * 3 + 2] = Math.sin(a) * r; ph.push(rnd() * 6.28); }
+    const base = pos.slice();
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color, size, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+    pts.frustumCulled = false; envLive.add(pts);
+    liveFns.push((dt, t) => {
+      for (let i = 0; i < n; i++) {
+        const k = i * 3, p = ph[i];
+        if (mode === 'fly') { pos[k] = base[k] + Math.sin(t * 0.6 + p) * 0.7; pos[k + 1] = base[k + 1] + Math.sin(t * 0.9 + p * 2) * 0.4; pos[k + 2] = base[k + 2] + Math.cos(t * 0.5 + p) * 0.7; }
+        else if (mode === 'rise') { pos[k] = base[k] + Math.sin(t + p) * 0.4; pos[k + 1] = (base[k + 1] + t * (0.7 + p * 0.06)) % h; pos[k + 2] = base[k + 2] + Math.cos(t * 0.8 + p) * 0.4; }
+        else { pos[k] = base[k] + Math.sin(t * 0.4 + p) * 0.8; pos[k + 1] = (((base[k + 1] - t * 0.35) % h) + h) % h; pos[k + 2] = base[k + 2] + Math.cos(t * 0.3 + p) * 0.8; }
+      }
+      geo.attributes.position.needsUpdate = true;
+    });
+  };
+  const inst = (geo, mat, n, place) => {
+    const im = new THREE.InstancedMesh(geo, mat, n);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), eu = new THREE.Euler(), p = new THREE.Vector3(), sc = new THREE.Vector3(), col = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      p.set(0, 0, 0); eu.set(0, rnd() * 6.28, 0); sc.set(1, 1, 1); col.setHex(0xffffff);
+      place(i, p, eu, sc, col);
+      q.setFromEuler(eu); m4.compose(p, q, sc); im.setMatrixAt(i, m4); im.setColorAt(i, col);
+    }
+    env.add(im); return im;
+  };
+  const pick = (arr) => arr[(rnd() * arr.length) | 0];
+  const disc = (r0, r1) => { const a = rnd() * Math.PI * 2, r = r0 + rnd() * (r1 - r0); return [Math.cos(a) * r, Math.sin(a) * r]; };
+  const grass = (n, cols, r0, r1, hMul = 1) => inst(new THREE.ConeGeometry(0.05, 0.4, 4), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 }), n, (i, p, eu, sc, col) => {
+    const [x, z] = disc(r0, r1); p.set(x, 0.17 * hMul, z); eu.set((rnd() - 0.5) * 0.4, rnd() * 6, (rnd() - 0.5) * 0.4); const s2 = (0.6 + rnd() * 1.1) * hMul; sc.set(1, s2, 1); col.setHex(pick(cols));
+  });
+  const brazier = (x, z) => { add(cyl(0.28, 0.14, 0.35, mat(0x2a2522), 8), x, 0.95, z); add(cyl(0.05, 0.07, 0.8, mat(0x2a2522), 6), x, 0.4, z); addFlame(x, 1.1, z, 1.6); };
+
   const torchAt = (x, z, light) => {
     add(cyl(0.05, 0.07, 1.8, wood, 6), x, 0.9, z);
     add(new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), new THREE.MeshBasicMaterial({ color: cfg.torch })), x, 1.95, z);
     light.position.set(x, 2.1, z);
+    addFlame(x, 1.95, z, 1.1);
   };
   const tx = cfg.env === 'tower' ? 2.6 : 4;
   torchAt(-tx, -3, torchLightA);
@@ -324,6 +378,97 @@ function buildEnv(cfg) {
     }
     default: break;
   }
+
+  // ---- оформление локации: детали, живность, свет
+  const dirt = mat(0x6a5a44), bark = mat(0x3a2a1a), ironM = mat(0x3a3a40, { metalness: 0.6, roughness: 0.5 });
+  switch (cfg.env) {
+    case 'village': {
+      grass(420, [0x4f7a34, 0x3d6a2c, 0x5f8a3a, 0x6a8a3a], 3, 30);
+      inst(new THREE.SphereGeometry(0.06, 6, 5), new THREE.MeshStandardMaterial({ color: 0xffffff }), 70, (i, p, eu, sc, col) => { const [x, z] = disc(4, 24); p.set(x, 0.18, z); col.setHex(pick([0xff5a6a, 0xffd84a, 0xffffff, 0xc48aff])); });
+      add(cyl(0.8, 0.9, 0.9, stone, 14), -8, 0.45, -9);                                     // колодец
+      add(cyl(0.65, 0.65, 0.05, mat(0x1a3a5a), 14), -8, 0.86, -9);
+      for (const s2 of [-1, 1]) add(cyl(0.06, 0.06, 1.9, wood, 6), -8 + s2 * 0.75, 1.5, -9);
+      add(new THREE.Mesh(new THREE.ConeGeometry(1.25, 0.7, 4), mat(0x7a3a22)), -8, 2.7, -9).rotation.y = Math.PI / 4;
+      for (let i = 0; i < 5; i++) { const b = cyl(0.45, 0.45, 0.8, mat(0xc8a84a), 10); b.rotation.z = Math.PI / 2; b.rotation.y = i; add(b, 7 + (i % 3) * 0.9, 0.45 + (i > 2 ? 0.8 : 0), -6 + (i % 2)); }
+      for (let i = 0; i < 14; i++) { const a = -2.6 + i * 0.2; const [x, z] = polar(a, 13.5); add(box(0.15, 1.1 - (i % 4) * 0.2, 0.15, wood), x, 0.5, z); if (i < 13) { const b = box(1.0, 0.1, 0.06, wood); b.rotation.y = -a - 0.1; add(b, x + 0.5, 0.7, z); } }
+      add(cyl(0.5, 0.6, 0.18, dkStone, 10), -9, 0.09, 3);                                   // кострище
+      addFlame(-9, 0.2, 3, 1.4);
+      motes(60, 0xfff2a0, 0.07, 'fly', 3, 22, 3);
+      break;
+    }
+    case 'forest': {
+      grass(380, [0x1f4a2a, 0x2a5a30, 0x183a22], 3, 32, 1.2);
+      inst(new THREE.SphereGeometry(0.14, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff }), 55, (i, p, eu, sc, col) => { const [x, z] = disc(4, 26); p.set(x, 0.02, z); sc.setScalar(0.5 + rnd() * 1.4); col.setHex(pick([0x66ffe0, 0xb86aff, 0x66a8ff])); });
+      for (let i = 0; i < 7; i++) { const [x, z] = disc(6, 18); const l = cyl(0.32, 0.36, 3.2, bark, 8); l.rotation.z = Math.PI / 2; l.rotation.y = rnd() * 3; add(l, x, 0.3, z); }
+      for (let i = 0; i < 9; i++) { const [x, z] = disc(5, 22); add(cyl(0.38, 0.5, 0.45, bark, 8), x, 0.22, z); }
+      scatter(10, 6, 16, (x, z, a) => { const w = new THREE.Mesh(new THREE.TorusGeometry(0.9, 0.025, 4, 14), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22 })); w.rotation.y = a; add(w, x, 1.2 + rnd(), z); });
+      motes(90, 0xb8ff6a, 0.1, 'fly', 3, 26, 3.5);
+      break;
+    }
+    case 'mine': {
+      inst(new THREE.OctahedronGeometry(0.28), new THREE.MeshBasicMaterial({ color: 0xffffff }), 46, (i, p, eu, sc, col) => { const [x, z] = disc(7, 30); p.set(x, 0.3 + rnd() * 0.3, z); eu.set(rnd() * 0.5, rnd() * 6, rnd() * 0.5); sc.set(0.6 + rnd() * 0.5, 1.2 + rnd() * 2.2, 0.6 + rnd() * 0.5); col.setHex(pick([0x4aa8ff, 0xb86aff, 0x4affc8])); });
+      for (const x of [-0.55, 0.55]) add(box(0.1, 0.1, 40, ironM), x, 0.06, -8);
+      for (let i = 0; i < 24; i++) add(box(1.5, 0.08, 0.2, wood), 0, 0.03, -26 + i * 1.6);
+      add(box(1.3, 0.7, 1.7, mat(0x5a4a3a, { metalness: 0.3 })), 0.0, 0.55, -11);
+      add(box(1.0, 0.2, 1.4, mat(0x2a2a2a)), 0, 0.92, -11);
+      for (let i = 0; i < 6; i++) { const a = i * 1.047 + 0.3; const [x, z] = polar(a, 9); add(cyl(0.012, 0.012, 1.6, ironM, 3), x, 3.4, z); add(new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffc070 })), x, 2.55, z); addFlame(x, 2.5, z, 0.45); }
+      motes(80, 0xffd9a0, 0.035, 'fall', 3, 24, 7);
+      break;
+    }
+    case 'swamp': {
+      inst(new THREE.CylinderGeometry(0.012, 0.02, 1.6, 4), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 }), 260, (i, p, eu, sc, col) => { const [x, z] = disc(10.5, 32); p.set(x, 0.8, z); eu.set((rnd() - 0.5) * 0.3, 0, (rnd() - 0.5) * 0.3); sc.set(1, 0.6 + rnd() * 1.1, 1); col.setHex(pick([0x6a7a3a, 0x7a8a42, 0x4a5a2a, 0x8a7a42])); });
+      inst(new THREE.CircleGeometry(0.4, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide }), 50, (i, p, eu, sc, col) => { const [x, z] = disc(12, 28); p.set(x, 0.07, z); eu.set(-Math.PI / 2, 0, 0); sc.setScalar(0.6 + rnd()); col.setHex(pick([0x3a7a3a, 0x4a8a3a])); });
+      for (let i = 0; i < 5; i++) {                                                            // болотные огоньки
+        const w = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), new THREE.MeshBasicMaterial({ color: 0x9affd0, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+        const [bx, bz] = disc(12, 26); const ph = rnd() * 6; envLive.add(w);
+        liveFns.push((dt, t) => { w.position.set(bx + Math.sin(t * 0.4 + ph) * 1.5, 1.0 + Math.sin(t * 1.3 + ph) * 0.35, bz + Math.cos(t * 0.35 + ph) * 1.5); w.scale.setScalar(0.8 + 0.3 * Math.sin(t * 5 + ph)); });
+      }
+      const mist = new THREE.Mesh(new THREE.CircleGeometry(30, 24), new THREE.MeshBasicMaterial({ color: 0xaad8d0, transparent: true, opacity: 0.1, depthWrite: false }));
+      mist.rotation.x = -Math.PI / 2; envLive.add(mist); mist.position.y = 0.5;
+      liveFns.push((dt, t) => { mist.position.y = 0.5 + Math.sin(t * 0.4) * 0.12; mist.rotation.z = t * 0.02; });
+      motes(70, 0x8affc8, 0.09, 'fly', 8, 30, 2.5);
+      break;
+    }
+    case 'fortress': {
+      for (let i = 0; i < 4; i++) { const [x, z] = polar(i * 1.571 + 0.8, 8.2); brazier(x, z); }
+      scatter(9, 9, 14, (x, z) => add(cyl(0.38, 0.34, 0.8, mat(0x6a4a2a), 10), x, 0.4, z));
+      for (let i = 0; i < 3; i++) { const [x, z] = polar(i * 2 + 0.4, 15.8); add(box(1.6, 0.08, 0.08, wood), x, 1.2, z).rotation.y = -i * 2; add(cyl(0.02, 0.02, 1.2, ironM, 4), x, 1.4, z); }
+      ring(10, 15.2, (x, z) => addFlame(x, 3.0, z, 0.8), 0.15);
+      motes(70, 0xffc890, 0.04, 'rise', 2, 16, 8);
+      break;
+    }
+    case 'canyon': {
+      inst(new THREE.BoxGeometry(0.06, 0.06, 0.4), new THREE.MeshStandardMaterial({ color: 0xffffff }), 36, (i, p, eu, sc, col) => { const [x, z] = disc(4, 11); p.set(x, 0.05, z); eu.set(rnd() * 0.5, rnd() * 6, rnd() * 0.5); sc.set(1, 1, 0.5 + rnd() * 1.5); col.setHex(0xe8e0c8); });
+      for (let i = 0; i < 6; i++) { const [x, z] = polar(i * 1.047, 12.3); const gl = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffa030 })); envLive.add(gl); const ph = i; liveFns.push((dt, t) => { gl.position.set(x, 0.1 + Math.max(0, Math.sin(t * 1.3 + ph)) * 0.5, z); gl.scale.setScalar(0.6 + 0.4 * Math.max(0, Math.sin(t * 1.3 + ph))); }); }
+      motes(120, 0xff7a2a, 0.07, 'rise', 4, 30, 14);
+      break;
+    }
+    case 'approach': {
+      for (let i = 0; i < 12; i++) { const [x, z] = disc(10, 30); const t2 = cyl(0.1, 0.22, 3.4, mat(0x2a2430), 5); t2.rotation.z = (rnd() - 0.5) * 0.3; add(t2, x, 1.7, z); const br = cyl(0.04, 0.08, 1.4, mat(0x2a2430), 4); br.rotation.z = 1.0; add(br, x + 0.5, 2.7, z); }
+      for (let i = 0; i < 5; i++) { const [x, z] = disc(9, 20); const st = box(0.7, 1.7, 0.5, mat(0x57576a)); st.rotation.y = rnd() * 6; add(st, x, 0.85, z); add(new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 8), mat(0x57576a)), x, 1.95, z); }
+      grass(220, [0x3a3a4a, 0x2f2f3f, 0x44445a], 3, 30, 0.8);
+      for (let i = 0; i < 3; i++) { const m2 = new THREE.Mesh(new THREE.CircleGeometry(14 + i * 4, 20), new THREE.MeshBasicMaterial({ color: 0x9a90c8, transparent: true, opacity: 0.07, depthWrite: false })); m2.rotation.x = -Math.PI / 2; m2.position.y = 0.3 + i * 0.35; envLive.add(m2); liveFns.push((dt, t) => { m2.rotation.z = t * (0.02 + i * 0.01); }); }
+      motes(120, 0xb0a0ff, 0.05, 'fall', 2, 30, 9);
+      break;
+    }
+    case 'castle': {
+      for (let i = 0; i < 6; i++) { const [x, z] = polar(i * 1.047 + 0.5, 9.5); brazier(x, z); }
+      ring(6, 13, (x, z, a) => { const b = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 3.4), new THREE.MeshBasicMaterial({ color: 0x9a1828, side: THREE.DoubleSide })); b.rotation.y = -a + Math.PI / 2; b.position.set(x, 3.2, z); envLive.add(b); liveFns.push((dt, t) => { b.rotation.x = Math.sin(t * 1.6 + a) * 0.06; }); }, 0.2);
+      motes(140, 0xff8a40, 0.06, 'rise', 3, 26, 14);
+      break;
+    }
+    case 'tower': {
+      for (let i = 0; i < 3; i++) { const [x, z] = polar(i * 2.09 + 0.5, 3.6); add(cyl(0.05, 0.1, 1.3, mat(0xd0a030, { metalness: 0.8 }), 8), x, 0.65, z); add(cyl(0.12, 0.12, 0.07, mat(0xd0a030, { metalness: 0.8 }), 10), x, 1.3, z); for (let k = -1; k <= 1; k++) { add(cyl(0.025, 0.025, 0.2, mat(0xf4ecd4), 6), x + k * 0.09, 1.43, z); addFlame(x + k * 0.09, 1.52, z, 0.25); } }
+      const chand = new THREE.Mesh(new THREE.TorusGeometry(0.9, 0.03, 6, 20), new THREE.MeshStandardMaterial({ color: 0xd0a030, metalness: 0.8, roughness: 0.3 })); chand.rotation.x = Math.PI / 2; add(chand, 0, 4.6, -1);
+      for (let i = 0; i < 8; i++) { const a = i * 0.785; addFlame(Math.cos(a) * 0.9, 4.65, -1 + Math.sin(a) * 0.9, 0.3); }
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.4, 5.5, 14, 1, true), new THREE.MeshBasicMaterial({ color: 0xffe8a0, transparent: true, opacity: 0.09, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      shaft.position.set(0, 3.2, -3.6); shaft.rotation.x = 0.2; envLive.add(shaft);
+      liveFns.push((dt, t) => { shaft.material.opacity = 0.08 + 0.02 * Math.sin(t * 0.7); });
+      motes(70, 0xffe8a0, 0.035, 'fall', 0.5, 5.5, 6);
+      break;
+    }
+    default: break;
+  }
   env.traverse((o) => { o.updateMatrix(); o.matrixAutoUpdate = false; });   // статичный мир — не пересчитываем каждый кадр
   A.ambient(cfg.env);
 }
@@ -374,6 +519,11 @@ function equip(id) {
   state.weapon = id;
   firstFrame = true;
   bow.drawing = false;
+  weaponModel.scale.setScalar(0.3);                                  // оружие «появляется» в руке
+  trailReset();
+  const two = !!WEAPONS[id].twoHanded;
+  shield.visible = !two;                                             // двуручное: щита нет
+  if (two && state.mode === 'play') showMessage('Двуручное оружие\nЩит убран — блокировать нельзя', 1.8);
   restPose();
   wpnEl.textContent = 'Оружие: ' + WEAPONS[id].name;
 }
@@ -420,6 +570,10 @@ function drawHud() {
     c.fillStyle = i < state.hp ? '#ff4d5e' : '#4a4f66';
     c.fillText('♥', 6 + i * 36, 34);
   }
+  const gp = state.stats.guardMax ? Math.max(0, state.guard / state.stats.guardMax) : 0;
+  c.fillStyle = '#2a2f44'; c.fillRect(8, 56, 240, 9);
+  c.fillStyle = state.guardBroken > 0 ? '#ff3b3b' : gp < 0.3 ? '#ffb02e' : '#5ab8ff';
+  c.fillRect(8, 56, 240 * gp, 9);
   c.font = '19px sans-serif';
   c.fillStyle = '#ffffff';
   c.fillText('Ур. ' + (state.inTower ? 'башня' : (state.level + 1) + '/' + LEVELS.length) + ' · ' + WEAPONS[state.weapon].name, 8, 78);
@@ -631,6 +785,7 @@ function makeEnemy(type, cfg = {}, boss = false) {
     burn: 0, freeze: 0, vuln: 0, burnSfx: 0, stepT: Math.random() * 0.5,
     armAngle: ARM_IDLE, headTilt: 0, jawOpen: 0, warn: 0, hover: spec.hover || 0,
     gait: Math.random() * 6, wb: 0, armD: ARM_IDLE, k: 0, hitK: 0, lt: 0,
+    guardChance: cfg.blocks ? 0.9 : (spec.guard || 0), guardMax: (boss ? 130 : 60), guardHp: (boss ? 130 : 60), guardT: 0, guardCd: 0,
     kv: new THREE.Vector3(), poise: poiseMax, poiseMax, combo: 0, lungeCd: 3 + Math.random() * 3, dodgeCd: 0, frzImm: 0, spreadT: 0, fx: null, strafe: Math.random() < 0.5 ? 1 : -1,
   };
 }
@@ -686,7 +841,7 @@ function poseEnemy(e, time) {
   else if (e.burn > 0) { const p = 0.5 + 0.5 * Math.sin(time * 18); e.skin.emissive.setRGB(0.9 * p, 0.3 * p, 0); e.skin.emissiveIntensity = 1; }
   else if (e.freeze > 0) { e.skin.emissive.setRGB(0.15, 0.4, 0.6); e.skin.emissiveIntensity = 1; }
   else { e.skin.emissive.setHex(0x000000); e.skin.emissiveIntensity = 1; }
-  e.cloth.emissive.setRGB(e.warn, e.warn * (e.st === 'breath' ? 0.4 : 0), 0);
+  if (e.guardT > 0) e.cloth.emissive.setRGB(0.1, 0.25, 0.55); else e.cloth.emissive.setRGB(e.warn, e.warn * (e.st === 'breath' ? 0.4 : 0), 0);
   if (e.tick) e.tick(time, e);
   if (e.burn > 0 || e.freeze > 0 || e.fx) {
     const fx = enemyFx(e);
@@ -738,6 +893,7 @@ function loadLevel(idx, message) {
   clearEnemies();
   buildEnv(cfg);
   state.hp = state.stats.maxHp;
+  state.guard = state.stats.guardMax; state.guardBroken = 0;
   state.mode = 'play';
   rig.position.set(0, 0, 5);
   rig.rotation.set(0, 0, 0);
@@ -758,6 +914,7 @@ function spawnBossIfNeeded() {
   const b = state.bossPending;
   state.bossPending = null;
   const e = spawnEnemy(b.type, 0, -7, b, true);
+  if (isHeavy(e)) sfx('rumble', 0, -7, { h: e.scale });
   sfx('voice', e.root.position.x, e.root.position.z, { t: b.type, k: 'alert' });
   showMessage('Босс: ' + b.name + '!', 3);
   drawHud();
@@ -916,6 +1073,26 @@ function updateTower(dt, time) {
 }
 
 // ---------------------------------------------------------------- бой
+function updateGuard(dt) {
+  const mx = state.stats.guardMax;
+  const old = Math.round(state.guard);
+  if (state.guardBroken > 0) {
+    state.guardBroken -= dt;
+    if (state.guardBroken <= 0) { state.guard = mx * 0.5; showMessage('Щит снова готов', 0.8); }
+  } else {
+    state.guardIdle -= dt;
+    if (state.guardIdle <= 0) state.guard = Math.min(mx, state.guard + 16 * dt);
+  }
+  let att = null;
+  for (const g of state.enemies) {
+    if (g.dead || !(g.st === 'windup' || g.st === 'strike' || g.st === 'lunge')) continue;
+    if (Math.hypot(head.x - g.root.position.x, head.z - g.root.position.z) < g.reach + 1.6) { att = g; break; }
+  }
+  if (att && playerGuardsAgainst(att)) state.guardT += dt; else state.guardT = 0;
+  if (Math.round(state.guard) !== old && state.mode === 'play') hudDirty = true;
+}
+let hudDirty = false;
+
 function hurtPlayer(n = 1) {
   if (Math.random() < state.stats.evade) { showMessage('Амулет защитил!', 0.8); return; }
   state.hp = Math.max(0, state.hp - n);
@@ -943,6 +1120,7 @@ function coverBlocks(ax, az, bx, bz) {
 
 let blocking = false;
 function playerGuardsAgainst(g) {
+  if (WEAPONS[state.weapon].twoHanded || state.guardBroken > 0) return false;   // двуручное оружие / щит пробит
   if (!vrActive && !blocking) return false;       // на компьютере щит работает при блоке (Shift / правая кнопка)
   tmp.subVectors(head, g.root.position); tmp.y = 0;
   const d = tmp.length() || 1;
@@ -952,16 +1130,50 @@ function playerGuardsAgainst(g) {
   return shieldPos.distanceTo(hit) < state.stats.blockR;
 }
 
+const isHeavy = (g) => g.type === 'golem' || g.type === 'dragon' || g.scale >= 1.5;
+function guardCost(g) {
+  const heavy = Math.max(1, g.scale * 0.9);
+  const dm = state.diff === 'mega' ? 1.2 : state.diff === 'easy' ? 0.7 : 1;
+  return 24 * g.spec.dmg * heavy * (g.boss ? 1.25 : 1) * (1 + g.phase * 0.15) * (g.type === 'golem' || g.type === 'dragon' ? 1.4 : 1) * dm;
+}
+
 function resolveStrike(g) {
   tmp.subVectors(head, g.root.position); tmp.y = 0;
   if (tmp.length() > g.reach + 0.8) return;       // промах
+  if (isHeavy(g)) {                                // удар великана: грохот и дрожь
+    sfx('stomp', g.root.position.x, g.root.position.z, { h: g.scale * 1.6 });
+    haptic('left', 0.6, 140); haptic('right', 0.6, 140);
+  }
   if (playerGuardsAgainst(g)) {
-    sfx('block', g.root.position.x, g.root.position.z);
-    haptic('left', 1, 150);
     tmp.subVectors(head, g.root.position); tmp.y = 0; tmp.normalize();
-    g.st = 'recover'; g.t = -0.6;
-    g.root.position.addScaledVector(tmp, -0.7 / Math.max(1, g.scale));
-    showMessage('Блок!', 0.8);
+    if (state.guardT < 0.22) {                     // ПАРИРОВАНИЕ: щит поднят в последний момент
+      sfx('parry', g.root.position.x, g.root.position.z);
+      haptic('left', 1, 200);
+      g.st = 'recover'; g.t = -1.1; g.resolved = true; g.combo = 0; g.poise = g.poiseMax * 0.3;
+      g.kv.addScaledVector(tmp, -4 / Math.max(1, g.scale));
+      state.guard = Math.min(state.stats.guardMax, state.guard + 15);
+      fxSpark(head.x - tmp.x * 0.5, head.y - 0.3, head.z - tmp.z * 0.5, 3, 14, 4, 4);
+      showMessage('Парирование!', 0.9);
+      return;
+    }
+    const cost = guardCost(g);
+    state.guard -= cost; state.guardIdle = 1.4;
+    g.root.position.addScaledVector(tmp, -0.5 / Math.max(1, g.scale));
+    if (state.guard <= 0) {                        // щит не выдержал
+      state.guard = 0; state.guardBroken = 2.2;
+      sfx('guardBreak', g.root.position.x, g.root.position.z);
+      haptic('left', 1, 300);
+      fxSpark(head.x - tmp.x * 0.5, head.y - 0.3, head.z - tmp.z * 0.5, 3, 20, 5, 5);
+      showMessage('Щит пробит!', 1.4);
+      hurtPlayer(g.spec.dmg);
+    } else {
+      sfx('block', g.root.position.x, g.root.position.z);
+      if (state.guard < state.stats.guardMax * 0.3) sfx('guardStrain');
+      haptic('left', 1, 150);
+      g.st = 'recover'; g.t = -0.2;
+      showMessage(state.guard < state.stats.guardMax * 0.3 ? 'Щит трещит!' : 'Блок!', 0.8);
+    }
+    drawHud();
   } else {
     hurtPlayer(g.spec.dmg);
   }
@@ -985,6 +1197,7 @@ function resolveBreath(g) {
 }
 
 function killEnemy(g) {
+  if (isHeavy(g)) sfx('rumble', g.root.position.x, g.root.position.z, { h: g.scale });
   g.dead = true; g.deadT = 0; g.hp = 0; g.st = 'dead';
   g.burn = 0; g.freeze = 0;
   scene.remove(g.bar);
@@ -999,7 +1212,7 @@ function killEnemy(g) {
 function igniteEnemy(g, secs) {
   if (g.dead || g.type === 'fire') return;
   if (g.freeze > 0) { g.freeze = 0; fxSpark(g.root.position.x, 1.0 * g.scale, g.root.position.z, 1, 10, 3, 3); return; }   // огонь растапливает лёд
-  if (g.burn <= 0) sfx('burn', g.root.position.x, g.root.position.z);
+  if (g.burn <= 0) sfx('ignite', g.root.position.x, g.root.position.z);
   g.burn = Math.max(g.burn, secs); g.burnSfx = 0;
 }
 
@@ -1010,14 +1223,21 @@ function damageEnemy(g, dmgRaw, W = {}) {
   const wasFrozen = g.freeze > 0;
   if (wasFrozen && W.elem !== 'ice') dmg *= 1.25;
   let guarded = false;
-  if (g.blocks && g.st === 'chase' && !W.breakArmor && Math.random() < 0.5) {
-    guarded = true; dmg *= 0.15;
-    g.st = 'windup'; g.t = 0.2; g.resolved = false;
-    showMessage('Рыцарь блокирует!', 0.8);
+  if (g.guardT > 0) {                                                    // враг в защите: урон почти не проходит, но защита не вечна
+    guarded = true;
+    g.guardHp -= dmg * (W.breakArmor ? 3.5 : W.elem === 'wind' ? 1.4 : 1) * (state.diff === 'easy' ? 1.5 : 1);
+    dmg *= 0.12;
+    if (g.guardHp <= 0) {
+      g.guardHp = g.guardMax * 0.6; g.guardT = 0; g.guardCd = 1.5; guarded = false;
+      g.st = 'recover'; g.t = -1.0; g.resolved = true; g.combo = 0; g.poise = g.poiseMax * 0.4;
+      sfx('guardBreak', g.root.position.x, g.root.position.z);
+      showMessage('Защита врага пробита!', 1.0);
+      dmg = dmgRaw * 1.2;
+    }
   }
   g.hp -= dmg;
   const px = g.root.position.x, pz = g.root.position.z, py = 1.0 * g.scale;
-  if (guarded) sfx('clang', px, pz, { p: 1.2 });
+  if (guarded) { sfx('clang', px, pz, { p: 1.2 }); fxSpark(px, py, pz, 3, 6, 3, 6); }
   else {
     sfx(W.elem === 'hammer' ? 'boom' : 'hitFlesh', px, pz, { e: W.elem });
     sfx('voice', px, pz, { t: g.type, k: 'hurt' });
@@ -1036,8 +1256,9 @@ function damageEnemy(g, dmgRaw, W = {}) {
       g.st = 'chase'; g.t = 0; g.resolved = true; g.stun = 0; g.combo = 0;
       sfx('freeze', px, pz); fxSpark(px, py, pz, 1, 16, 3, 2);
     }
+    if (W.elem === 'hammer') fxSpark(px, 0.08, pz, 3, 18, 6, 9);              // ударная волна от молота
     if (wasFrozen && W.elem === 'hammer') {                                // молот разбивает лёд
-      g.freeze = 0; g.hp -= 25; sfx('freeze', px, pz); fxSpark(px, py, pz, 1, 24, 5, 4);
+      g.freeze = 0; g.hp -= 25; sfx('shatter', px, pz); fxSpark(px, py, pz, 1, 24, 5, 4);
     }
     if (W.breakArmor) g.vuln = W.breakArmor;
   }
@@ -1098,6 +1319,7 @@ function updateMelee(dt) {
   swordSpeed = swordSpeed * 0.5 + raw * 0.5;
   prevTip.copy(tipPos);
   swingCd -= dt;
+  updateTrail(dt, W);
 
   if (swordSpeed > 2.0 && !swinging) { swinging = true; sfx('swing', undefined, undefined, { s: Math.min(1, swordSpeed / 9), e: W.elem }); }
   if (swordSpeed < 1.0) swinging = false;
@@ -1113,6 +1335,51 @@ function updateMelee(dt) {
         swingCd = W.cd;
         return;
       }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- шлейф клинка и частицы стихий
+const TRAIL_N = 16;
+const trailPos = new Float32Array(TRAIL_N * 2 * 3);
+const trailGeo = new THREE.BufferGeometry();
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+{
+  const idx = [];
+  for (let i = 0; i < TRAIL_N - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  trailGeo.setIndex(idx);
+}
+const trailMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+const trailMesh = new THREE.Mesh(trailGeo, trailMat);
+trailMesh.frustumCulled = false;
+trailMesh.visible = false;
+if (!GUEST) scene.add(trailMesh);
+const trailPts = [];
+const TRAIL_COL = { fire: 0xff7a1a, ice: 0x8fe0ff, wind: 0x9fffe0, hammer: 0xc8ccd8 };
+let fxT = 0;
+function trailReset() { trailPts.length = 0; trailMesh.visible = false; }
+function updateTrail(dt, W) {
+  const a = tipPos, b = midPos;
+  trailPts.unshift([a.x, a.y, a.z, b.x, b.y, b.z]);
+  if (trailPts.length > TRAIL_N) trailPts.pop();
+  const sp = clamp((swordSpeed - 1.5) / 6, 0, 1);
+  trailMat.color.setHex(TRAIL_COL[W.elem] || 0xdfe8f5);
+  trailMat.opacity = sp * 0.65;
+  trailMesh.visible = sp > 0.02 && trailPts.length > 2;
+  for (let i = 0; i < TRAIL_N; i++) {
+    const p = trailPts[Math.min(i, trailPts.length - 1)];
+    if (!p) continue;
+    trailPos.set(p, i * 6);
+  }
+  trailGeo.attributes.position.needsUpdate = true;
+  // частицы стихии
+  fxT -= dt;
+  if (fxT <= 0 && W.elem && W.elem !== 'hammer') {
+    fxT = 0.045;
+    const burst = swordSpeed > 2.5 ? 2 : (Math.random() < 0.25 ? 1 : 0);
+    if (burst) {
+      const ci = W.elem === 'fire' ? 0 : W.elem === 'ice' ? 1 : 2;
+      spark(tipPos.x, tipPos.y, tipPos.z, ci, burst, W.elem === 'wind' ? 1.8 : 0.9, W.elem === 'fire' ? -2 : W.elem === 'ice' ? 1.5 : 0);
     }
   }
 }
@@ -1143,6 +1410,7 @@ function fireArrow(c) {
   haptic('right', 0.7, 80);
 }
 function updateBow(dt) {
+  if (trailMesh.visible) trailMesh.visible = false;
   bow.cd -= dt;
   if (bow.drawing) {
     bow.t += dt;
@@ -1188,6 +1456,8 @@ function updateEnemy(g, dt, time) {
   if (g.frzImm > 0) g.frzImm -= dt;
   if (g.dodgeCd > 0) g.dodgeCd -= dt;
   g.lungeCd -= dt;
+  if (g.guardT > 0) g.guardT -= dt;
+  if (g.guardCd > 0) g.guardCd -= dt;
   // скорость отбрасывания (ветер)
   if (g.kv.lengthSq() > 0.01) {
     g.root.position.x += g.kv.x * dt; g.root.position.z += g.kv.z * dt;
@@ -1213,7 +1483,7 @@ function updateEnemy(g, dt, time) {
   g.walk = 0;
   if (g.freeze > 0) {                                                      // заморожен: не двигается и не атакует
     g.freeze -= dt; g.warn = 0;
-    if (g.freeze <= 0) { sfx('freeze', g.root.position.x, g.root.position.z); fxSpark(g.root.position.x, 1.0 * g.scale, g.root.position.z, 1, 14, 3, 3); g.st = 'chase'; g.t = 0; }
+    if (g.freeze <= 0) { sfx('shatter', g.root.position.x, g.root.position.z); fxSpark(g.root.position.x, 1.0 * g.scale, g.root.position.z, 1, 14, 3, 3); g.st = 'chase'; g.t = 0; }
     poseEnemy(g, time);
     return;
   }
@@ -1232,11 +1502,30 @@ function updateEnemy(g, dt, time) {
   const speed = g.spec.speed * g.speedMul;
   const windup = g.spec.windup * g.windMul;
   let armTarget = ARM_IDLE;
-  const stepSfx = (rate) => { g.stepT -= dt; if (g.stepT <= 0 && dist < 14) { g.stepT = 0.5 / rate; sfx('step', g.root.position.x, g.root.position.z, { h: g.scale }); } };
+  const heavy = isHeavy(g);
+  const stepSfx = (rate) => {
+    g.stepT -= dt;
+    if (g.stepT > 0 || dist >= 16) return;
+    g.stepT = 0.5 / rate;
+    if (heavy) {                                                       // огромный моб: грохот при каждом шаге
+      sfx('stomp', g.root.position.x, g.root.position.z, { h: g.scale * (g.type === 'dragon' ? 2 : g.type === 'golem' ? 1.5 : 1.2) });
+      if (dist < 10) { const k = 0.7 * (1 - dist / 10); haptic('left', k, 110); haptic('right', k, 110); }
+    } else sfx('step', g.root.position.x, g.root.position.z, { h: g.scale });
+  };
 
   switch (g.st) {
     case 'chase': {
       if (g.stun > 0) break;
+      if (g.guardT > 0) {                                              // стоит в защите, пятится
+        armTarget = -1.9;
+        if (dist < g.reach + 0.8) { g.root.position.addScaledVector(fwd, -speed * 0.35 * dt); g.walk = 1; }
+        break;
+      }
+      if (g.guardChance > 0 && g.guardCd <= 0 && swordSpeed > 3 && dist < g.reach + 1.6 && Math.random() < g.guardChance * (state.diff === 'mega' ? 1.5 : state.diff === 'easy' ? 0.3 : 1) * dt * 6) {
+        g.guardT = 0.75; g.guardCd = 1.9;
+        sfx('clang', g.root.position.x, g.root.position.z, { p: 0.9 });
+        break;
+      }
       if (g.fire && g.breathCd <= 0 && dist > g.reach + 1.0 && dist < 16) {
         g.st = 'breath'; g.t = 0;
         sfx('voice', g.root.position.x, g.root.position.z, { t: g.type, k: 'alert' });
@@ -1657,7 +1946,8 @@ function guestFrame(dt, time) {
   };
   setPose(avWeapon, G.sw);
   setPose(avShield, G.sh);
-  if (avWeapon.userData.model && avWeapon.userData.model.userData.tick) avWeapon.userData.model.userData.tick(time);
+  avShield.visible = !(G.w && WEAPONS[G.w] && WEAPONS[G.w].twoHanded);
+  if (avWeapon.userData.model && avWeapon.userData.model.userData.tick) avWeapon.userData.model.userData.tick(time, 0.2);
 
   const target = new THREE.Vector3(avatar.position.x, avatar.position.y - 0.2, avatar.position.z);
   if (G.view === 'first') {
@@ -1803,6 +2093,7 @@ renderer.setAnimationLoop(() => {
 
   if (GUEST) {
     guestFrame(dt, time);
+    updateEnvLive(dt, time);
     updateSparks(dt);
     updateMessage(dt);
     hudTimer -= dt;
@@ -1821,7 +2112,11 @@ renderer.setAnimationLoop(() => {
   if (vrActive) updateVR(dt); else updateDesktop(dt);
   clampRig();
   camera.getWorldPosition(head);
-  if (weaponModel && weaponModel.userData.tick) weaponModel.userData.tick(time);
+  if (weaponModel) {
+    if (weaponModel.scale.x < 1) weaponModel.scale.setScalar(Math.min(1, weaponModel.scale.x + dt * 5));
+    if (weaponModel.userData.tick) weaponModel.userData.tick(time, clamp(swordSpeed / 8, 0, 1));
+  }
+  updateEnvLive(dt, time);
 
   const playing = state.mode === 'play';
   if (playing) {
@@ -1830,6 +2125,8 @@ renderer.setAnimationLoop(() => {
 
   for (const g of state.enemies) { if (playing || g.dead) updateEnemy(g, dt, time); }
   if (playing) {
+    updateGuard(dt);
+    if (hudDirty) { hudDirty = false; drawHud(); }
     separateEnemies();
     updateArrows(dt);
     if (state.inTower) updateTower(dt, time);

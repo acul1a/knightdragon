@@ -10,15 +10,15 @@ import * as THREE from 'three';
    ===================================================================== */
 
 export const ENEMY = {
-  goblin:   { name: 'Гоблин',            hp: 100, speed: 1.3, windup: 0.9,  skin: 0x5fa043, cloth: 0x5a3b22, eyes: 0xffe14d, dmg: 1, hitR: 0.55, height: 1.7, reach: 1.7 },
+  goblin:   { name: 'Гоблин',            hp: 100, speed: 1.3, windup: 0.9,  skin: 0x5fa043, cloth: 0x5a3b22, eyes: 0xffe14d, dmg: 1, hitR: 0.55, height: 1.7, reach: 1.7, guard: 0.15 },
   spider:   { name: 'Паук',              hp: 90,  speed: 2.1, windup: 0.55, skin: 0x2b2b33, cloth: 0x1a1a20, eyes: 0xff2a2a, dmg: 1, hitR: 0.6,  height: 0.9, reach: 1.5, deadStyle: 'flip' },
-  skeleton: { name: 'Скелет-шахтёр',     hp: 110, speed: 1.4, windup: 0.8,  skin: 0xe8e4d0, cloth: 0x8a8a80, eyes: 0x66ccff, dmg: 1, hitR: 0.5,  height: 1.7, reach: 1.7 },
-  golem:    { name: 'Каменный голем',    hp: 230, speed: 0.8, windup: 1.2,  skin: 0x8a8f99, cloth: 0x6a6f79, eyes: 0xff8a2a, dmg: 1, hitR: 0.75, height: 2.1, reach: 1.9 },
-  bog:      { name: 'Болотник',          hp: 120, speed: 1.5, windup: 0.8,  skin: 0x3f6b6b, cloth: 0x24403a, eyes: 0xb8ff5a, dmg: 1, hitR: 0.6,  height: 1.6, reach: 1.7 },
-  dark:     { name: 'Воин ордена',       hp: 140, speed: 1.6, windup: 0.7,  skin: 0x2c2c3a, cloth: 0x16161e, eyes: 0xff3a3a, dmg: 1, hitR: 0.55, height: 1.9, reach: 1.8 },
+  skeleton: { name: 'Скелет-шахтёр',     hp: 110, speed: 1.4, windup: 0.8,  skin: 0xe8e4d0, cloth: 0x8a8a80, eyes: 0x66ccff, dmg: 1, hitR: 0.5,  height: 1.7, reach: 1.7, guard: 0.3 },
+  golem:    { name: 'Каменный голем',    hp: 230, speed: 0.8, windup: 1.2,  skin: 0x8a8f99, cloth: 0x6a6f79, eyes: 0xff8a2a, dmg: 1, hitR: 0.75, height: 2.1, reach: 1.9, guard: 0.45 },
+  bog:      { name: 'Болотник',          hp: 120, speed: 1.5, windup: 0.8,  skin: 0x3f6b6b, cloth: 0x24403a, eyes: 0xb8ff5a, dmg: 1, hitR: 0.6,  height: 1.6, reach: 1.7, guard: 0.2 },
+  dark:     { name: 'Воин ордена',       hp: 140, speed: 1.6, windup: 0.7,  skin: 0x2c2c3a, cloth: 0x16161e, eyes: 0xff3a3a, dmg: 1, hitR: 0.55, height: 1.9, reach: 1.8, guard: 0.7 },
   fire:     { name: 'Огненное создание', hp: 120, speed: 1.8, windup: 0.6,  skin: 0xff7a1a, cloth: 0xb02a10, eyes: 0xffff66, dmg: 1, hitR: 0.55, height: 1.9, reach: 1.7, hover: 0.25 },
-  elite:    { name: 'Страж дракона',     hp: 180, speed: 1.7, windup: 0.6,  skin: 0x9a3a3a, cloth: 0x3a1c1c, eyes: 0xffd24a, dmg: 1, hitR: 0.55, height: 1.9, reach: 2.2 },
-  dragon:   { name: 'Дракон',            hp: 520, speed: 1.1, windup: 0.9,  skin: 0x8a2222, cloth: 0x5a1414, eyes: 0xffe14d, dmg: 2, hitR: 0.9,  height: 2.2, reach: 2.0, fire: true, phases: true },
+  elite:    { name: 'Страж дракона',     hp: 180, speed: 1.7, windup: 0.6,  skin: 0x9a3a3a, cloth: 0x3a1c1c, eyes: 0xffd24a, dmg: 1, hitR: 0.55, height: 1.9, reach: 2.2, guard: 0.6 },
+  dragon:   { name: 'Дракон',            hp: 520, speed: 1.1, windup: 0.9,  skin: 0x8a2222, cloth: 0x5a1414, eyes: 0xffe14d, dmg: 2, hitR: 0.9,  height: 2.2, reach: 2.0, fire: true, phases: true, guard: 0.12 },
 };
 
 const sph = (r, w = 14, h = 10) => new THREE.SphereGeometry(r, w, h);

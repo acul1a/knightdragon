@@ -297,6 +297,46 @@ const SND = {
     osc({ dest: d, f: 130 / h, f2: 50 / h, dur: 0.11, vol: 0.22 * Math.min(1.4, h), at: 0.002 });
     nz({ dest: d, type: 'lowpass', f: 500 / Math.sqrt(h), dur: 0.08, vol: 0.18 * Math.min(1.4, h) });
   },
+  stomp(d, a) {                  // тяжёлый шаг: грохот и дрожь земли — чем больше моб, тем сильнее
+    const h = clamp(a.h || 1.5, 1, 4);
+    osc({ dest: d, f: 62 / Math.sqrt(h), f2: 24, dur: 0.5 + 0.12 * h, vol: Math.min(0.75, 0.28 + 0.1 * h), at: 0.002 });
+    osc({ dest: d, type: 'triangle', f: 38, f2: 20, dur: 0.9 + 0.1 * h, vol: 0.25, at: 0.01 });
+    nz({ dest: d, type: 'lowpass', f: 420, f2: 70, dur: 0.6 + 0.1 * h, vol: 0.4, at: 0.003 });
+    for (let i = 0; i < 4; i++) nz({ dest: d, type: 'bandpass', f: rand(250, 700), q: 3, dur: 0.1, vol: 0.12, delay: 0.05 + i * 0.07 });   // сыплются камни
+  },
+  rumble(d, a) {                 // раскат: появление гиганта, удар босса
+    const h = clamp(a.h || 2, 1, 4);
+    osc({ dest: d, type: 'sawtooth', f: 36, f2: 26, dur: 1.6, vol: 0.2, at: 0.2, lp: 160 });
+    nz({ dest: d, type: 'lowpass', f: 180, f2: 50, dur: 1.5 + 0.2 * h, vol: 0.5, at: 0.25 });
+    crackle(d, 1.0, 0.06, 0.2);
+  },
+  ignite(d) {
+    nz({ dest: d, type: 'bandpass', f: 400, f2: 2200, q: 0.6, dur: 0.35, vol: 0.28, at: 0.03 });
+    nz({ dest: d, type: 'lowpass', f: 900, f2: 200, dur: 0.6, vol: 0.2, at: 0.05 });
+    crackle(d, 0.7, 0.12);
+  },
+  shatter(d) {
+    [3200, 4100, 5200, 6100, 2600].forEach((f, i) => osc({ dest: d, f, f2: f * 0.9, dur: 0.3 - i * 0.03, vol: 0.07, at: 0.001, delay: i * 0.015 }));
+    nz({ dest: d, type: 'highpass', f: 3500, dur: 0.35, vol: 0.28, at: 0.001 });
+    osc({ dest: d, f: 140, f2: 60, dur: 0.25, vol: 0.25 });
+  },
+  guardBreak(d) {                // щит пробит
+    nz({ dest: d, type: 'highpass', f: 2500, dur: 0.3, vol: 0.35, at: 0.001 });
+    SND.clang(d, { p: 0.55 });
+    osc({ dest: d, f: 90, f2: 30, dur: 0.6, vol: 0.5, at: 0.002 });
+    voice(d, { f0: 260, f1: 90, dur: 0.4, vol: 0.12, rough: 0.5, fm: [500, 1200], noise: 0.1 });
+  },
+  guardStrain(d) {               // щит держит, но трещит
+    osc({ dest: d, type: 'sawtooth', f: 160, f2: 110, dur: 0.18, vol: 0.08, lp: 500 });
+    nz({ dest: d, type: 'bandpass', f: 1800, q: 2, dur: 0.1, vol: 0.12 });
+  },
+  parry(d) {                     // успешное парирование
+    SND.clang(d, { p: 1.7 });
+    chimeNotes(d, [1568, 2093], 0.05, 0.08);
+  },
+  whoosh(d, a) {
+    nz({ dest: d, type: 'bandpass', f: 300, f2: 1600, q: 0.8, dur: 0.3, vol: 0.1 + 0.1 * (a.s || 0.5), at: 0.06 });
+  },
   pickup(d) {
     chimeNotes(d, [880, 1109, 1319, 1760], 0.08, 0.14);
     nz({ dest: d, type: 'highpass', f: 6000, dur: 0.4, vol: 0.04, at: 0.05 });
@@ -316,7 +356,7 @@ const SND = {
   spawn(d) { osc({ dest: d, f: 110, f2: 55, dur: 0.5, vol: 0.2 }); nz({ dest: d, type: 'lowpass', f: 600, f2: 150, dur: 0.5, vol: 0.2 }); },
 };
 
-const SND_WET = { clang: 0.3, block: 0.3, boom: 0.4, fireBreath: 0.35, voice: 0.25, roar: 0.4, pickup: 0.45, fanfare: 0.4, princess: 0.5, gate: 0.4 };
+const SND_WET = { stomp: 0.35, rumble: 0.5, shatter: 0.3, guardBreak: 0.35, parry: 0.3, clang: 0.3, block: 0.3, boom: 0.4, fireBreath: 0.35, voice: 0.25, roar: 0.4, pickup: 0.45, fanfare: 0.4, princess: 0.5, gate: 0.4 };
 const lastPlay = {};
 
 export function play(name, x, z, arg) {
@@ -373,7 +413,16 @@ export function ambient(kind) {
     s.start(); lfo.start();
     ambNodes = { s, lfo, g };
     ambTimer = setInterval(() => {
-      if (!ready() || Math.random() > 0.5) return;
+      if (!ready()) return;
+      if (Math.random() < 0.18) {                                           // порыв ветра / шелест
+        const dw = bus(rand(-0.9, 0.9), rand(0.2, 0.5), 0.3);
+        nz({ dest: dw, type: 'bandpass', f: rand(300, 600), f2: rand(900, 1600), q: 0.5, dur: 1.4, vol: 0.07, at: 0.6 });
+      }
+      if (cfg.ev === 'owl' && Math.random() < 0.35) {                       // птичьи трели
+        const db = bus(rand(-0.9, 0.9), rand(0.25, 0.5), 0.25), f = rand(2400, 3600);
+        for (let i = 0; i < 3 + (Math.random() * 3 | 0); i++) osc({ dest: db, f, f2: f * rand(1.1, 1.4), dur: 0.07, vol: 0.035, at: 0.005, delay: i * 0.1 });
+      }
+      if (Math.random() > 0.5) return;
       const d = bus(rand(-0.8, 0.8), rand(0.3, 0.7), 0.4);
       const ev = cfg.ev;
       if (ev === 'owl') { osc({ dest: d, f: 390, f2: 350, dur: 0.5, vol: 0.08, at: 0.05, lp: 900 }); osc({ dest: d, f: 360, f2: 300, dur: 0.7, vol: 0.08, at: 0.05, delay: 0.6, lp: 900 }); }
